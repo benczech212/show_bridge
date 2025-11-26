@@ -1,0 +1,214 @@
+controller_name: "Akai APC40"
+description: >
+  Full APC40 layout + state bindings for 8 output groups.
+  Channels in the sheet are 1–8 but MIDI uses 0–7.
+  This file reflects that (channel = sheet_channel - 1).
+author: "Benjamin Czech"
+version: 2.0
+
+# =========================================================
+# Input mappings: raw MIDI layout (notes/CCs per control)
+# =========================================================
+input_mappings:
+  # --------------------------
+  # Group/Track Template
+  # --------------------------
+  group_template: &group_template
+    clip_buttons:
+      - { name: clip_row_5, note: 53 }
+      - { name: clip_row_4, note: 54 }
+      - { name: clip_row_3, note: 55 }
+      - { name: clip_row_2, note: 56 }
+      - { name: clip_row_1, note: 57 }
+    clip_stop:
+      note: 52
+    track_select:
+      note: 51
+    activator:
+      note: 50
+    solo:
+      note: 49
+    arm:
+      note: 48
+    slider:
+      cc: 7
+
+  # --------------------------
+  # Groups 1–8
+  # --------------------------
+  groups:
+    1:
+      <<: *group_template
+      channel: 0
+    2:
+      <<: *group_template
+      channel: 1
+    3:
+      <<: *group_template
+      channel: 2
+    4:
+      <<: *group_template
+      channel: 3
+    5:
+      <<: *group_template
+      channel: 4
+    6:
+      <<: *group_template
+      channel: 5
+    7:
+      <<: *group_template
+      channel: 6
+    8:
+      <<: *group_template
+      channel: 7
+
+  # --------------------------
+  # Master / Global Controls
+  # --------------------------
+  global:
+    stop_all_clips:
+      note: 81
+      channel: 0   # spreadsheet: 81 / 1
+    master_track_select:
+      note: 80
+      channel: 0
+    queue_level:
+      cc: 47
+      channel: 0
+    master_slider:
+      cc: 14
+      channel: 0
+
+    # Right-side vertical buttons: 82–86 / 1
+    scene_launch:
+      - { name: scene_launch_1, note: 82, channel: 0 }
+      - { name: scene_launch_2, note: 83, channel: 0 }
+      - { name: scene_launch_3, note: 84, channel: 0 }
+      - { name: scene_launch_4, note: 85, channel: 0 }
+      - { name: scene_launch_5, note: 86, channel: 0 }
+
+    # Navigation block: Right, Left, Up, Down
+    navigation:
+      right: { note: 96, channel: 0 }
+      left:  { note: 97, channel: 0 }
+      up:    { note: 94, channel: 0 }
+      down:  { note: 95, channel: 0 }
+
+    # Shift / Nudge / Tap Tempo
+    timing_controls:
+      shift_resync: { note: 98, channel: 0 }
+      nudge_minus:  { note: 101, channel: 0 }
+      nudge_plus:   { note: 100, channel: 0 }
+      tap_tempo:    { note: 99, channel: 0 }
+
+    # Global buttons rows (58–61 and 62–65)
+    global_buttons_row1:
+      - { name: global_1, note: 58, channel: 0 }
+      - { name: global_2, note: 59, channel: 0 }
+      - { name: global_3, note: 60, channel: 0 }
+      - { name: global_4, note: 61, channel: 0 }
+
+    global_buttons_row2:
+      - { name: global_5, note: 62, channel: 0 }
+      - { name: global_6, note: 63, channel: 0 }
+      - { name: global_7, note: 64, channel: 0 }
+      - { name: global_8, note: 65, channel: 0 }
+
+    # Transport (Play / Stop / Rec)
+    transport:
+      play: { note: 91, channel: 0 }
+      stop: { note: 92, channel: 0 }
+      rec:  { note: 93, channel: 0 }
+
+    # Global slider at bottom-right
+    global_slider:
+      cc: 15
+      channel: 0
+
+
+# =========================================================
+# State mappings: how input controls map into state machine
+# =========================================================
+state_mappings:
+  # How group-local controls map to properties / functions
+  groups:
+    properties:
+      # Clip Stop toggles playing on/off (gesture-based)
+      playing:
+        control: clip_stop
+        action: toggle_property
+
+      # Solo / queue toggle effects (gesture-based for solo)
+      effects:
+        control: solo
+        action: toggle_property
+
+      # Activator toggles transforms
+      transforms:
+        control: activator
+        action: toggle_property
+
+      # clip_row_1 toggles FFT mask
+      fft_mask:
+        control: clip_row_1
+        action: toggle_property
+
+      # Arm toggles color
+      color:
+        control: arm
+        action: toggle_property
+
+    # Group slider controls opacity (0–1) via CC value
+    opacity:
+      control: slider
+      action: set_opacity_from_cc
+
+    # Clip rows 2–5 are intensity presets for the group
+    intensity_presets:
+      - { control: clip_row_2, value: 0.25 }
+      - { control: clip_row_3, value: 0.50 }
+      - { control: clip_row_4, value: 0.75 }
+      - { control: clip_row_5, value: 1.00 }
+
+  # How global controls map to functions
+  global:
+    # Global slider controls a global intensity scale (0–1)
+    global_intensity:
+      control: global_slider
+      action: set_global_intensity_from_cc
+
+    # Queue button toggles 'effects' for all groups (and flips global_queue_level)
+    global_effects:
+      control: queue_level
+      action: toggle_effects_all
+
+    # Play/Stop control global autopilot
+    global_autopilot_on:
+      control: play
+      action: set_global_autopilot_on
+
+    global_autopilot_off:
+      control: stop
+      action: set_global_autopilot_off
+
+    # Stop All Clips: short = start all, long = stop all
+    all_clips_play_stop:
+      control: stop_all_clips
+      action: control_all_clips
+
+    # Nudge -, Nudge +, Tap Tempo, Tempo Sync (immediate actions)
+    nudge_minus:
+      control: nudge_minus
+      action: nudge_minus
+
+    nudge_plus:
+      control: nudge_plus
+      action: nudge_plus
+
+    tempo_tap:
+      control: tap_tempo
+      action: tap_tempo
+
+    tempo_sync:
+      control: shift_resync
+      action: tempo_sync

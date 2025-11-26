@@ -1,0 +1,75 @@
+# connections.yaml
+
+inputs:
+  http:
+    resolume_arena:
+      - name: "arena_http_in_local"
+        host: "127.0.0.1"
+        port: 8080
+        use_https: false
+        api_base: "/api/v1"
+        username: "admin"
+        password: "secret"
+        timeout: 2.0
+        verify_ssl: true
+
+  osc:
+    resolume_arena:
+      - name: "arena_osc_in_local"
+        host: "127.0.0.1"
+        port: 7000      # port we LISTEN on for incoming OSC
+        direction: "input"   # optional: "input" vs "output"
+    resolume_wire:
+      - name: "wire_osc_in"
+        host: "127.0.0.1"
+        port: 7001
+        direction: "input"
+    touchdesigner:
+      - name: "td_osc_in"
+        host: "127.0.0.1"
+        port: 7002
+        direction: "input"
+
+  midi:
+    controllers:
+      - name: "Akai APC40"
+        midi_in_port: "APC40 mk1"      # as seen in mido.get_input_names()
+        midi_out_port: "APC40 mk1"     # as seen in mido.get_output_names()
+      # you can add other controllers here
+
+outputs:
+  http:
+    resolume_arena:
+      - name: "arena_http_out_main"
+        host: "127.0.0.1"
+        port: 8080
+        use_https: false
+        api_base: "/api/v1"
+        username: "admin"
+        password: "secret"
+        timeout: 2.0
+        verify_ssl: true
+
+  osc:
+    resolume_arena:
+      - name: "arena_osc_out_local"
+        host: "127.0.0.1"
+        port: 7000      # port ARENA listens on
+        direction: "output"
+    resolume_wire:
+      - name: "wire_osc_out"
+        host: "127.0.0.1"
+        port: 9000
+        direction: "output"
+    touchdesigner:
+      - name: "td_osc_out"
+        host: "127.0.0.1"
+        port: 10000
+        direction: "output"
+
+  midi:
+    devices:
+      - name: "APC40_out"
+        midi_out_port: "APC40 mk1"
+      - name: "VirtualBus"
+        midi_out_port: "LoopMIDI Port 1"
