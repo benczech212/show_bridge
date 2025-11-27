@@ -126,6 +126,43 @@ input_mappings:
       channel: 0
 
 
+
+  # -----------------------------------
+  # Velocity mappings (per note / range)
+  # -----------------------------------
+  velocity_mappings:
+    maps:
+      # 1) Simple toggle (explicit)
+      toggle_green:
+        off: 0
+        on: 1
+
+      # 2) Simple toggle (shorthand)
+      toggle_red: 3          # off=0, on=3
+      toggle_orange: 5      # off=0, on=5
+      # 3) Multi-color
+      multi_example:
+        off: 0
+        colors: [1, 3, 5]    # we pick first non-off as "on" for booleans
+      
+
+    ranges:
+      
+      - { start: 48, end: 53, map: toggle_green }
+      # Intensity / Clip Launch buttons 53–56 = red
+      - { start: 53, end: 56, map: toggle_red }
+      # Scene buttons 82–86 = green
+      - { start: 82, end: 86, map: toggle_green }
+
+    notes:
+      "57": toggle_orange  # FFT Mask
+      "81": toggle_green    # stop_all_clips
+      "91": toggle_green    # play
+      "92": toggle_green    # stop
+
+
+
+
 # =========================================================
 # State mappings: how input controls map into state machine
 # =========================================================
@@ -212,3 +249,24 @@ state_mappings:
     tempo_sync:
       control: shift_resync
       action: tempo_sync
+
+    # Scene snapshot buttons (scene_launch_1–5)
+    scene_1:
+      control: scene_launch_1
+      action: scene_slot
+
+    scene_2:
+      control: scene_launch_2
+      action: scene_slot
+
+    scene_3:
+      control: scene_launch_3
+      action: scene_slot
+
+    scene_4:
+      control: scene_launch_4
+      action: scene_slot
+
+    scene_5:
+      control: scene_launch_5
+      action: scene_slot

@@ -8,26 +8,23 @@ inputs:
         port: 8080
         use_https: false
         api_base: "/api/v1"
-        username: "admin"
-        password: "secret"
         timeout: 2.0
-        verify_ssl: true
 
   osc:
     resolume_arena:
       - name: "arena_osc_in_local"
         host: "127.0.0.1"
-        port: 7000      # port we LISTEN on for incoming OSC
+        port: 7001      # port we LISTEN on for incoming OSC
         direction: "input"   # optional: "input" vs "output"
     resolume_wire:
       - name: "wire_osc_in"
         host: "127.0.0.1"
-        port: 7001
+        port: 9001
         direction: "input"
     touchdesigner:
       - name: "td_osc_in"
         host: "127.0.0.1"
-        port: 7002
+        port: 11001
         direction: "input"
 
   midi:
@@ -45,10 +42,7 @@ outputs:
         port: 8080
         use_https: false
         api_base: "/api/v1"
-        username: "admin"
-        password: "secret"
         timeout: 2.0
-        verify_ssl: true
 
   osc:
     resolume_arena:
@@ -64,7 +58,7 @@ outputs:
     touchdesigner:
       - name: "td_osc_out"
         host: "127.0.0.1"
-        port: 10000
+        port: 11000
         direction: "output"
 
   midi:

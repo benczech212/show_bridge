@@ -1,96 +1,69 @@
 #!/usr/bin/env python3
 """
-APC40 state-machine demo driven by two configs:
+Generic APC40-style state-machine demo driven by mapping profiles.
 
-- Input mapping:  input_mappings/midi_apc40.yaml
-- State mapping:  state_mappings/state_apc40_layers.yaml
+Each mapping profile is a single YAML file in ./mappings, e.g.:
 
-Maintains 8 "output groups" with properties:
-    playing: bool
-    effects: bool
-    transforms: bool
-    fft_mask: bool
-    color: bool
-    opacity: float (0-1)
-    intensity: float (0-1)
+  mappings/apc40.yaml
 
-Each boolean property also has an "autopilot" flag:
+with structure:
 
-    <prop>_autopilot: bool
+  controller_name: "Akai APC40"
+  description: "..."
+  author: "..."
+  version: 2.0
 
-Button gesture semantics for boolean-layer buttons
-(Arm, Solo, Activator, Clip Stop, Clip Row 1):
+  input_mappings:
+    groups: ...
+    global: ...
+    velocity_mappings: ...
 
-  - Short press:
-      if prop is False: set to True
-      if prop is True:  call next_<prop>() (hook point)
-  - Long press:
-      if prop is True:  set to False
-  - Double press:
-      toggle <prop>_autopilot
+  state_mappings:
+    groups: ...
+    global: ...
 
-Intensity preset semantics for clip_row_2–5:
+This script:
 
-  - Short press sets intensity to:
-      row 2 -> 0.25
-      row 3 -> 0.50
-      row 4 -> 0.75
-      row 5 -> 1.00
-  - Long press on any of them -> intensity 0.0
-  - Double press -> random quantized intensity != current
-  - LEDs show intensity as a red "bar" across the 4 buttons:
-      0.00 -> all off
-      0.25 -> first 1 red
-      0.50 -> first 2 red
-      0.75 -> first 3 red
-      1.00 -> all 4 red
+  - Scans ./mappings for *.yml / *.yaml
+  - Treats each as a "device profile"
+  - Lets you select one (or auto-selects if it matches MIDI ports)
+  - Builds a state machine for 8 "output groups":
 
-Global controls:
+        playing: bool
+        effects: bool
+        transforms: bool
+        fft_mask: bool
+        color: bool
+        opacity: float (0–1)
+        intensity: float (0–1)
 
-  - Play          -> set_global_autopilot_on (short)
-  - Stop          -> set_global_autopilot_off (short)
-  - Stop All Clips:
-        short -> start_all_clips()  (set playing=True for all groups)
-        long  -> stop_all_clips()   (set playing=False for all groups)
-  - Queue Level   -> toggle_effects_all() and flip global_queue_level
-  - Nudge -, Nudge +
-        short -> global_nudge(-1) / global_nudge(+1)
-  - Tap Tempo     -> global_tap_tempo() (compute global_tempo_bpm from taps)
-  - Tempo Sync    -> global_tempo_sync() (placeholder hook for external sync)
-
-Autopilot semantics for boolean props:
-  - global_autopilot: bool (controlled by Play/Stop)
-  - effective_autopilot(prop) = global_autopilot AND <prop>_autopilot
-
-LED behavior for boolean properties:
-  - prop == False                      -> off
-  - prop == True, global & local on    -> solid
-  - prop == True, global_autopilot off -> blink SLOW
-  - prop == True, global on, local off -> blink FAST
-
-Colors:
-  - fft_mask boolean: orange when "on" (subject to blink)
-  - other booleans: full-bright
-  - intensity presets: red (static, no blink)
+  - Supports short / long / double press semantics
+  - Supports per-note LED velocities via velocity_mappings
 """
 
 from __future__ import annotations
 
 import time
+import random
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Tuple, Any
+from typing import Dict, Tuple, Any, List, Optional
+from typing_extensions import runtime
+from copy import deepcopy
+
 
 import mido
 import yaml
-import random
 
-INPUT_MAPPING_FILE = "input_mappings/midi_apc40.yaml"
-STATE_MAPPING_FILE = "state_mappings/state_apc40_layers.yaml"
+# -------------------------------------------------------------------
+# Paths
+# -------------------------------------------------------------------
+
+DEFAULT_MAPPINGS_DIR = "mappings"
 
 MidiKey = Tuple[str, int, int]  # ("note"|"cc", channel, note_or_cc)
 
-# APC40 color velocities – tweak to taste for your unit
+# APC40 color velocities – fallback defaults (used when no map present)
 RED_VELOCITY = 3     # typical: red
 ORANGE_VELOCITY = 5  # typical: amber/orange
 
@@ -142,17 +115,45 @@ class ActionSpec:
     property_name: str | None = None
     group_index: int | None = None
     intensity_value: float | None = None  # for intensity presets
+    scene_index: int | None = None        # for scene buttons
+
+
+
+@dataclass
+class VelocityProfile:
+    """
+    Describes how to light a note.
+
+    Supports:
+      - simple toggle: off/on
+      - multi-color: off + a list of colors (we pick first non-off as "on"
+        for boolean usage, but keep the whole list available for future).
+    """
+    off: int = 0
+    on: int = 127
+    colors: list[int] = field(default_factory=list)
+
+    def resolved_on(self) -> int:
+        """
+        Return the velocity we should use for a simple "on" state.
+
+        Priority:
+          1) First non-off color in colors[]
+          2) Explicit on value
+        """
+        for c in self.colors:
+            if c != self.off:
+                return c
+        return self.on
 
 
 @dataclass
 class MappingRuntime:
     action_map: Dict[MidiKey, ActionSpec] = field(default_factory=dict)
     group_addrs: Dict[int, GroupControlAddresses] = field(default_factory=dict)
+    note_velocity: Dict[int, VelocityProfile] = field(default_factory=dict)
+    scene_buttons: Dict[int, Tuple[int, int]] = field(default_factory=dict)  # scene_idx -> (channel, note)
 
-
-# ---------------------------------------------------------
-# Press manager (short/long/double)
-# ---------------------------------------------------------
 
 @dataclass
 class ButtonPressState:
@@ -161,6 +162,23 @@ class ButtonPressState:
     pending_click: bool = False
     pending_click_time: float = 0.0
 
+
+@dataclass
+class MappingProfile:
+    """
+    Represents a single controller mapping profile loaded from ./mappings.
+    One YAML file = one profile.
+    """
+    file_path: Path
+    name: str            # human-friendly name (e.g. controller_name or file stem)
+    controller_name: str
+    input_cfg: Dict[str, Any]
+    state_cfg: Dict[str, Any]
+
+
+# ---------------------------------------------------------
+# Press manager (short/long/double)
+# ---------------------------------------------------------
 
 class PressManager:
     """
@@ -230,9 +248,245 @@ class PressManager:
 # Config loading
 # ---------------------------------------------------------
 
-def load_yaml(path: str | Path) -> Dict[str, Any]:
-    path = Path(path)
-    return yaml.safe_load(path.read_text(encoding="utf-8"))
+def load_yaml_file(path: Path) -> Dict[str, Any]:
+    return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+
+
+def load_mapping_profiles(mappings_dir: Path) -> List[MappingProfile]:
+    """
+    Load all *.yml / *.yaml in mappings_dir and return a list of MappingProfile.
+    Each file is expected to contain:
+      - controller_name
+      - input_mappings
+      - state_mappings
+    """
+    if not mappings_dir.exists():
+        raise RuntimeError(f"Mappings directory does not exist: {mappings_dir}")
+
+    profiles: List[MappingProfile] = []
+
+    for path in sorted(mappings_dir.glob("*.y*ml")):
+        raw = load_yaml_file(path)
+
+        controller_name = raw.get("controller_name", path.stem)
+        input_cfg = raw.get("input_mappings") or {}
+        state_cfg = raw.get("state_mappings") or {}
+
+        if not input_cfg or not state_cfg:
+            print(f"WARNING: Skipping {path} (missing input_mappings or state_mappings)")
+            continue
+
+        profiles.append(
+            MappingProfile(
+                file_path=path,
+                name=controller_name,
+                controller_name=controller_name,
+                input_cfg=input_cfg,
+                state_cfg=state_cfg,
+            )
+        )
+
+    if not profiles:
+        raise RuntimeError(f"No valid mapping profiles found in {mappings_dir}")
+
+    return profiles
+
+
+def choose_mapping_profile(
+    profiles: List[MappingProfile],
+    midi_input_names: List[str],
+    desired_name: Optional[str] = None,
+) -> MappingProfile:
+    """
+    Select a mapping profile.
+
+    Priority:
+      1) If desired_name is provided, match by profile.name (case-insensitive) or file stem.
+      2) Try to auto-match controller_name to a MIDI input port name.
+      3) If only one profile exists, use it.
+      4) Otherwise, prompt user to pick.
+    """
+    # 1) Explicit selection by name
+    if desired_name:
+        matches = [
+            p for p in profiles
+            if p.name.lower() == desired_name.lower()
+            or p.file_path.stem.lower() == desired_name.lower()
+        ]
+        if matches:
+            p = matches[0]
+            print(f"Selected mapping profile by name: {p.name} ({p.file_path.name})")
+            return p
+        else:
+            print(f"WARNING: No mapping profile named '{desired_name}' found. Ignoring.")
+
+    # 2) Auto-match by controller_name inside MIDI input port name
+    lower_ports = [n.lower() for n in midi_input_names]
+    auto_candidates: List[MappingProfile] = []
+    for p in profiles:
+        cname = p.controller_name.lower()
+        if any(cname in port for port in lower_ports):
+            auto_candidates.append(p)
+
+    if len(auto_candidates) == 1:
+        p = auto_candidates[0]
+        print(f"Automatically selected mapping profile '{p.name}' "
+              f"based on MIDI ports and controller_name='{p.controller_name}'.")
+        return p
+
+    # 3) Only one profile total
+    if len(profiles) == 1:
+        p = profiles[0]
+        print(f"Using only available mapping profile: {p.name} ({p.file_path.name})")
+        return p
+
+    # 4) Prompt user
+    print("Available controller mapping profiles:")
+    for idx, p in enumerate(profiles):
+        print(f"  [{idx}] {p.name}  (file: {p.file_path.name})")
+
+    while True:
+        choice = input("Select mapping profile index: ").strip()
+        try:
+            idx = int(choice)
+        except ValueError:
+            print("Please enter a number.")
+            continue
+
+        if 0 <= idx < len(profiles):
+            return profiles[idx]
+
+        print(f"Index out of range. Choose between 0 and {len(profiles) - 1}.")
+
+
+def build_note_velocity_map(input_cfg: Dict[str, Any]) -> Dict[int, VelocityProfile]:
+    """
+    Build a map: note_number -> VelocityProfile from config like:
+
+      velocity_mappings:
+        maps:
+          toggle_green:
+            off: 0
+            on: 1
+          toggle_red: 3          # shorthand: off=0, on=3
+          multi:
+            off: 0
+            colors: [1, 3, 5]
+
+        ranges:
+          - { start: 48, end: 56, map: toggle_green }
+
+        notes:
+          "57": toggle_orange
+    """
+    vel_cfg = input_cfg.get("velocity_mappings")
+    if not vel_cfg:
+        print("[VEL] No velocity_mappings section found.")
+        return {}
+
+    maps_cfg = vel_cfg.get("maps", {})
+    ranges_cfg = vel_cfg.get("ranges", [])
+    notes_cfg = vel_cfg.get("notes", {})
+
+    named_profiles: Dict[str, VelocityProfile] = {}
+
+    print("[VEL] maps:")
+    for name, m in maps_cfg.items():
+        # --- Different shapes allowed for m ---
+        if isinstance(m, int):
+            # Shorthand: toggle with off=0, on=m
+            prof = VelocityProfile(off=0, on=int(m), colors=[])
+            print(f"  map '{name}' (int): off={prof.off} on={prof.on}")
+
+        elif isinstance(m, list):
+            # List of colors: off=0, colors=m, derive on from first non-zero
+            colors = [int(v) for v in m]
+            prof = VelocityProfile(off=0, on=127, colors=colors)
+            print(f"  map '{name}' (list): off={prof.off} colors={prof.colors}")
+
+        elif isinstance(m, dict):
+            # dict: off / on / colors
+            off_val = int(m.get("off", 0))
+
+            colors_raw = m.get("colors", [])
+            colors = [int(v) for v in colors_raw] if isinstance(colors_raw, list) else []
+
+            on_raw = m.get("on")
+            if on_raw is None:
+                # Try to derive 'on' from colors list
+                derived = next((c for c in colors if c != off_val), None)
+                if derived is not None:
+                    on_val = derived
+                    print(f"  map '{name}': derived on={on_val} from colors={colors}")
+                else:
+                    on_val = 127
+                    print(f"  WARNING: map '{name}' has no 'on' and no usable colors; "
+                          f"defaulting on={on_val}")
+            else:
+                on_val = int(on_raw)
+
+            prof = VelocityProfile(off=off_val, on=on_val, colors=colors)
+            print(f"  map '{name}' (dict): off={prof.off} on={prof.on} colors={prof.colors}")
+
+        else:
+            # Completely unknown type
+            print(f"  WARNING: map '{name}' has unsupported type {type(m)}; "
+                  f"defaulting to off=0 on=127")
+            prof = VelocityProfile(off=0, on=127, colors=[])
+
+        named_profiles[name] = prof
+
+    note_map: Dict[int, VelocityProfile] = {}
+
+    # --- apply ranges ---
+    print("[VEL] ranges:")
+    for r in ranges_cfg:
+        try:
+            start = int(r["start"])
+            end = int(r["end"])
+            map_name = r["map"]
+        except KeyError as e:
+            print(f"  WARNING: invalid range entry {r}: missing {e}")
+            continue
+
+        profile = named_profiles.get(map_name)
+        if not profile:
+            print(f"  WARNING: unknown map '{map_name}' in range {r}")
+            continue
+
+        a, b = sorted((start, end))
+        for note in range(a, b + 1):
+            note_map[note] = profile
+        print(f"  notes {a}–{b} -> map '{map_name}'")
+
+    # --- per-note overrides ---
+    print("[VEL] notes:")
+    for note_str, map_name in notes_cfg.items():
+        try:
+            note = int(note_str)
+        except ValueError:
+            print(f"  WARNING: invalid note key '{note_str}'")
+            continue
+
+        profile = named_profiles.get(map_name)
+        if not profile:
+            print(f"  WARNING: unknown map '{map_name}' for note {note}")
+            continue
+
+        note_map[note] = profile
+        print(f"  note {note} -> map '{map_name}' (off={profile.off} on={profile.on} "
+              f"colors={profile.colors})")
+
+    # --- final sanity for note 57 ---
+    if 57 in note_map:
+        prof = note_map[57]
+        print(f"[VEL] FINAL: note 57 mapped to off={prof.off} on={prof.on} "
+              f"colors={prof.colors}")
+    else:
+        print("[VEL] FINAL: note 57 has NO velocity profile")
+
+    return note_map
+
 
 
 def build_runtime_mapping(input_cfg: Dict[str, Any],
@@ -240,8 +494,12 @@ def build_runtime_mapping(input_cfg: Dict[str, Any],
     """
     Combine input_mappings + state_mappings into a mapping from
     raw MIDI events -> ActionSpec, plus LED address information.
+    input_cfg is the 'input_mappings' subtree from the YAML.
     """
     runtime = MappingRuntime()
+
+    # Per-note velocity profiles
+    runtime.note_velocity = build_note_velocity_map(input_cfg)
 
     group_state_cfg = state_cfg.get("groups", {})
     group_props_cfg = group_state_cfg.get("properties", {})
@@ -338,7 +596,7 @@ def build_runtime_mapping(input_cfg: Dict[str, Any],
             intensity_preset_notes=preset_notes,
         )
 
-     # --- Global controls ---
+    # --- Global controls ---
     global_state_cfg = state_cfg.get("global", {})
     input_global_cfg = input_cfg.get("global", {})
 
@@ -349,7 +607,39 @@ def build_runtime_mapping(input_cfg: Dict[str, Any],
         action_name = entry["action"]
 
         # Global slider (bottom-right) – mapped as global.global_slider
-        if control_name == "global_slider" and "global_slider" in input_global_cfg:
+        # Scene slots: map logical scene_launch_1..N to notes
+        if control_name.startswith("scene_launch"):
+            scene_list = input_global_cfg.get("scene_launch", [])
+            target = None
+            for idx, s_entry in enumerate(scene_list):
+                if s_entry.get("name") == control_name:
+                    target = (idx, s_entry)
+                    break
+
+            if not target:
+                print(f"WARNING: state_mappings.global '{name}' refers to "
+                      f"control '{control_name}' but no matching entry in "
+                      f"input_mappings.global.scene_launch.")
+                continue
+
+            scene_idx, s_entry = target
+            key = ("note", s_entry.get("channel", 0), s_entry["note"])
+
+            runtime.action_map[key] = ActionSpec(
+                action=action_name,   # "scene_slot"
+                scope="global",
+                property_name=None,
+                group_index=None,
+                scene_index=scene_idx,
+            )
+
+            runtime.scene_buttons[scene_idx] = (
+                s_entry.get("channel", 0),
+                s_entry["note"],
+            )
+
+        # Global slider (bottom-right) – mapped as global.global_slider
+        elif control_name == "global_slider" and "global_slider" in input_global_cfg:
             g_slider = input_global_cfg["global_slider"]
             if "cc" in g_slider:
                 key = ("cc", g_slider.get("channel", 0), g_slider["cc"])
@@ -468,6 +758,9 @@ class Apc40StateMachine:
         self.midi_out = midi_out
         self.groups = [OutputGroupState() for _ in range(8)]
 
+        # Per-note velocity profiles
+        self.note_velocity: Dict[int, VelocityProfile] = runtime.note_velocity
+
         # Global autopilot: both global and local must be True for
         # autopilot to be effectively "on" for a layer.
         self.global_autopilot: bool = True
@@ -476,10 +769,6 @@ class Apc40StateMachine:
 
         # Simple global "queue level" placeholder (0/1)
         self.global_queue_level: int = 0
-
-        # Global tempo from tap-tempo
-        self.global_tempo_bpm: float | None = None
-        self.tap_times: list[float] = []
 
         # Blink engine
         self.fast_blink_on = True
@@ -490,8 +779,24 @@ class Apc40StateMachine:
         self.last_fast_toggle = now
         self.last_slow_toggle = now
 
+        # Scene snapshots (for scene_launch buttons)
+        # scene index is 0-based: 0..4 for scene_launch_1..5
+        self.scene_snapshots: Dict[int, list[OutputGroupState]] = {}
+        self.active_scene: int | None = None
+        self.active_scene_pristine: bool = False  # True until any other change
+
         # Initialize intensity LEDs to reflect default intensity
         self._init_intensity_preset_leds()
+        
+    def _mark_state_changed(self):
+        """
+        Called whenever the user changes state (any group/global toggle,
+        slider, etc.). If a scene is currently active, this clears the
+        'pristine' flag so the scene LED becomes solid instead of blinking.
+        """
+        if self.active_scene is not None and self.active_scene_pristine:
+            self.active_scene_pristine = False
+            self._update_scene_leds()
 
     # ---- LED init for intensity presets ----
 
@@ -551,6 +856,7 @@ class Apc40StateMachine:
             self.set_intensity_from_preset(group_idx, rand_value)
 
     def set_property(self, group_idx: int, prop: str, value: bool):
+        self._mark_state_changed()
         g = self.groups[group_idx]
         setattr(g, prop, value)
         print(f"[STATE] Group {group_idx + 1} {prop} -> {value}")
@@ -612,7 +918,8 @@ class Apc40StateMachine:
         ch = addrs.channel
         for idx, note in enumerate(notes):
             if idx < lit_count:
-                vel = RED_VELOCITY
+                profile = self.note_velocity.get(note)
+                vel = profile.resolved_on() if profile else RED_VELOCITY
             else:
                 vel = 0
             msg = mido.Message("note_on", channel=ch, note=note, velocity=vel)
@@ -681,31 +988,10 @@ class Apc40StateMachine:
 
     def global_tap_tempo(self):
         """
-        Tap-tempo: compute BPM from tap intervals.
-
-        - If gap > 2s since last tap, reset sequence.
-        - Use average of last few intervals for BPM.
+        Tap-tempo pulse event.
+        No BPM computation; used as a trigger for external sync logic.
         """
-        now = time.monotonic()
-        if self.tap_times and (now - self.tap_times[-1] > 2.0):
-            self.tap_times.clear()
-
-        self.tap_times.append(now)
-
-        if len(self.tap_times) >= 2:
-            intervals = [
-                self.tap_times[i] - self.tap_times[i - 1]
-                for i in range(1, len(self.tap_times))
-            ]
-            avg_interval = sum(intervals) / len(intervals)
-            if avg_interval > 0:
-                bpm = 60.0 / avg_interval
-                self.global_tempo_bpm = bpm
-                print(f"[STATE] Global tempo from tap -> {bpm:.2f} BPM "
-                      f"(taps={len(self.tap_times)})")
-        else:
-            print("[STATE] Tap tempo: first tap")
-
+        print("[STATE] Tap tempo pulse")
 
     def global_tempo_sync(self):
         """
@@ -715,14 +1001,28 @@ class Apc40StateMachine:
 
     # ---- LED feedback & blinking for boolean layers ----
 
-    def _velocity_for_prop(self, prop: str) -> int:
+    def _base_velocity_for_note(self, note: int, prop: str | None = None) -> int:
         """
-        Choose base LED velocity (color) for a property when "on".
+        Choose base LED velocity (color) for a note when "on".
+
+        If a velocity profile is configured for this note, use its
+        resolved_on() value. Otherwise:
+
+          - fft_mask -> ORANGE_VELOCITY
+          - others   -> full-bright 127
         """
-        if prop == "fft_mask":
-            return ORANGE_VELOCITY
-        # other layer toggles use full-bright
+        profile = self.note_velocity.get(note)
+        if profile:
+            vel = profile.resolved_on()
+            # print(f"[DEBUG] note {note} using mapped velocity {vel} (prop={prop})")
+            return vel
+
+
+        print(f"[DEBUG] note {note} using fallback 127 (prop={prop})")
         return 127
+
+
+
 
     def _desired_led_on(self, group_idx: int, prop: str) -> bool:
         """
@@ -761,7 +1061,7 @@ class Apc40StateMachine:
 
         on = self._desired_led_on(group_idx, prop)
         if on:
-            velocity = self._velocity_for_prop(prop)
+            velocity = self._base_velocity_for_note(note, prop)
         else:
             velocity = 0
 
@@ -790,48 +1090,168 @@ class Apc40StateMachine:
             for gi in range(len(self.groups)):
                 for prop in self.BOOL_PROPS:
                     self._update_led_for_property(gi, prop)
+            self._update_scene_leds()
+    # ---- Scene snapshots -------------------------------------------------
+
+    def _snapshot_group_state(self, g: OutputGroupState) -> OutputGroupState:
+        """
+        Create a copy of a group's state suitable for storing in a scene.
+
+        Requirements: capture all boolean/autopilot toggles,
+        but IGNORE opacity and intensity.
+        """
+        snap = deepcopy(g)
+        snap.opacity = 0.0
+        snap.intensity = 0.0
+        return snap
+
+    def _save_scene_snapshot(self, scene_index: int):
+        snaps = [self._snapshot_group_state(g) for g in self.groups]
+        self.scene_snapshots[scene_index] = snaps
+        print(f"[SCENE] Saved snapshot for scene {scene_index + 1}")
+        self._update_scene_leds()
+
+    def _apply_scene_snapshot(self, scene_index: int):
+        snaps = self.scene_snapshots.get(scene_index)
+        if not snaps:
+            print(f"[SCENE] No snapshot stored for scene {scene_index + 1}")
+            return
+
+        # Apply all saved group states (booleans + autopilots)
+        for i in range(min(len(self.groups), len(snaps))):
+            s = snaps[i]
+            g = self.groups[i]
+
+            g.playing = s.playing
+            g.playing_autopilot = s.playing_autopilot
+
+            g.effects = s.effects
+            g.effects_autopilot = s.effects_autopilot
+
+            g.transforms = s.transforms
+            g.transforms_autopilot = s.transforms_autopilot
+
+            g.fft_mask = s.fft_mask
+            g.fft_mask_autopilot = s.fft_mask_autopilot
+
+            g.color = s.color
+            g.color_autopilot = s.color_autopilot
+
+        self.active_scene = scene_index
+        self.active_scene_pristine = True  # no changes yet since launch
+
+        print(f"[SCENE] Applied snapshot for scene {scene_index + 1}")
+
+        # Refresh all LEDs (groups + scenes)
+        self._update_all_leds()
+
+    def _clear_scene_snapshot(self, scene_index: int):
+        if scene_index in self.scene_snapshots:
+            del self.scene_snapshots[scene_index]
+            print(f"[SCENE] Cleared snapshot for scene {scene_index + 1}")
+
+        if self.active_scene == scene_index:
+            self.active_scene = None
+            self.active_scene_pristine = False
+
+        self._update_scene_leds()
+
+    def handle_scene_button(self, scene_index: int, press_type: str):
+        """
+        Scene button semantics:
+
+          - Short press:
+              if snapshot exists -> apply it
+              (button becomes active; blinks if no further changes)
+
+          - Long press:
+              save current group toggles to this scene, overwriting any
+              existing snapshot. Illuminates the button.
+
+          - Double press:
+              clear snapshot for this scene and turn the LED off.
+        """
+        if press_type == "short":
+            if scene_index in self.scene_snapshots:
+                self._apply_scene_snapshot(scene_index)
+            else:
+                print(f"[SCENE] Scene {scene_index + 1} has no saved snapshot")
+
+        elif press_type == "long":
+            self._save_scene_snapshot(scene_index)
+
+        elif press_type == "double":
+            self._clear_scene_snapshot(scene_index)
+    def _update_all_leds(self):
+        """
+        Refresh LEDs for all groups and scenes.
+        """
+        for gi in range(len(self.groups)):
+            for prop in self.BOOL_PROPS:
+                self._update_led_for_property(gi, prop)
+            self._update_intensity_leds(gi)
+
+        self._update_scene_leds()
+
+    def _update_scene_leds(self):
+        """
+        Update LEDs for scene buttons.
+
+        Rules:
+          - No snapshot stored          -> LED off
+          - Snapshot stored, not active -> solid
+          - Snapshot stored, active and pristine -> blinking
+        """
+        for scene_idx, (ch, note) in self.runtime.scene_buttons.items():
+            has_snapshot = scene_idx in self.scene_snapshots
+
+            if not has_snapshot:
+                vel = 0
+            else:
+                base = self._base_velocity_for_note(note, prop=None)
+                if self.active_scene == scene_idx and self.active_scene_pristine:
+                    # Blink using fast blink state
+                    vel = base if self.fast_blink_on else 0
+                else:
+                    vel = base
+
+            msg = mido.Message("note_on", channel=ch, note=note, velocity=vel)
+            self.midi_out.send(msg)
 
 
 # ---------------------------------------------------------
-# Main loop
+# MIDI message handling
 # ---------------------------------------------------------
 
-def main():
-    input_cfg = load_yaml(INPUT_MAPPING_FILE)
-    state_cfg = load_yaml(STATE_MAPPING_FILE)
+IMMEDIATE_GLOBAL_ACTIONS = {
+    "nudge_minus",
+    "nudge_plus",
+    "tap_tempo",
+    "tempo_sync",
+    "set_global_autopilot_on",
+    "set_global_autopilot_off",
+}
 
-    controller_name = input_cfg.get("controller_name", "APC40")
-    runtime = build_runtime_mapping(input_cfg, state_cfg)
 
-    in_name = auto_select_port(mido.get_input_names(), controller_name, "input")
-    out_name = auto_select_port(mido.get_output_names(), controller_name, "output")
+def handle_immediate_global_action(spec: ActionSpec, sm: Apc40StateMachine):
+    """
+    Fire global actions that should not use short/long/double press logic.
+    These trigger immediately on note_on.
+    """
+    action = spec.action
 
-    print(f"\nUsing input:  {in_name}")
-    print(f"Using output: {out_name}")
-    print("Press Ctrl+C to exit.\n")
-
-    press_mgr = PressManager()
-
-    with mido.open_input(in_name) as in_port, mido.open_output(out_name) as out_port:
-        sm = Apc40StateMachine(runtime, out_port)
-        try:
-            while True:
-                now = time.monotonic()
-
-                # Process incoming messages
-                for msg in in_port.iter_pending():
-                    handle_midi_message(msg, runtime, sm, press_mgr, now)
-
-                # Resolve pending single-clicks (short presses)
-                for key, pt in press_mgr.poll(now):
-                    dispatch_press(key, pt, runtime, sm)
-
-                # Update blinking LEDs
-                sm.update_blink(now)
-
-                time.sleep(0.001)
-        except KeyboardInterrupt:
-            print("\nExiting.")
+    if action == "nudge_minus":
+        sm.global_nudge_minus()
+    elif action == "nudge_plus":
+        sm.global_nudge_plus()
+    elif action == "tap_tempo":
+        sm.global_tap_tempo()
+    elif action == "tempo_sync":
+        sm.global_tempo_sync()
+    elif action == "set_global_autopilot_on":
+        sm.set_global_autopilot_on()
+    elif action == "set_global_autopilot_off":
+        sm.set_global_autopilot_off()
 
 
 def handle_midi_message(msg: mido.Message,
@@ -867,7 +1287,6 @@ def handle_midi_message(msg: mido.Message,
             sm.set_opacity_from_cc(spec.group_index, msg.value)
         elif spec.scope == "global" and spec.action == "set_global_intensity_from_cc":
             sm.set_global_intensity_from_cc(msg.value)
-
 
 
 def dispatch_press(key: MidiKey,
@@ -913,37 +1332,87 @@ def dispatch_press(key: MidiKey,
             sm.global_tap_tempo()
         elif spec.action == "tempo_sync" and press_type == "short":
             sm.global_tempo_sync()
+        elif spec.action == "scene_slot" and spec.scene_index is not None:
+            sm.handle_scene_button(spec.scene_index, press_type)
 
 
-IMMEDIATE_GLOBAL_ACTIONS = {
-    "nudge_minus",
-    "nudge_plus",
-    "tap_tempo",
-    "tempo_sync",
-    "set_global_autopilot_on",
-    "set_global_autopilot_off",
-}
+# ---------------------------------------------------------
+# Main loop
+# ---------------------------------------------------------
 
+def main(argv: Optional[List[str]] = None):
+    import argparse
 
-def handle_immediate_global_action(spec: ActionSpec, sm: Apc40StateMachine):
-    """
-    Fire global actions that should not use short/long/double press logic.
-    These trigger immediately on note_on.
-    """
-    action = spec.action
+    parser = argparse.ArgumentParser(description="MIDI controller state-machine demo.")
+    parser.add_argument(
+        "--mappings-dir",
+        type=str,
+        default=DEFAULT_MAPPINGS_DIR,
+        help="Directory containing *.yaml mapping profiles (default: ./mappings)",
+    )
+    parser.add_argument(
+        "--device",
+        type=str,
+        default=None,
+        help="Mapping profile name to use (matches controller_name or file stem).",
+    )
+    args = parser.parse_args(argv)
 
-    if action == "nudge_minus":
-        sm.global_nudge_minus()
-    elif action == "nudge_plus":
-        sm.global_nudge_plus()
-    elif action == "tap_tempo":
-        sm.global_tap_tempo()
-    elif action == "tempo_sync":
-        sm.global_tempo_sync()
-    elif action == "set_global_autopilot_on":
-        sm.set_global_autopilot_on()
-    elif action == "set_global_autopilot_off":
-        sm.set_global_autopilot_off()
+    mappings_dir = Path(args.mappings_dir)
+
+    # Load all profiles
+    profiles = load_mapping_profiles(mappings_dir)
+
+    # Get MIDI ports so we can auto-match
+    midi_input_names = mido.get_input_names()
+    midi_output_names = mido.get_output_names()
+
+    # Choose mapping profile
+    profile = choose_mapping_profile(
+        profiles,
+        midi_input_names=midi_input_names,
+        desired_name=args.device,
+    )
+
+    full_cfg = load_yaml_file(profile.file_path)
+    input_cfg = full_cfg.get("input_mappings", {})
+    state_cfg = full_cfg.get("state_mappings", {})
+    controller_name = full_cfg.get("controller_name", profile.name)
+
+    print(f"\nUsing mapping profile: {profile.name} (file: {profile.file_path})")
+
+    # Build the runtime mapping (includes per-note velocity profiles)
+    runtime = build_runtime_mapping(input_cfg, state_cfg)
+
+    in_name = auto_select_port(midi_input_names, controller_name, "input")
+    out_name = auto_select_port(midi_output_names, controller_name, "output")
+
+    print(f"\nUsing input:  {in_name}")
+    print(f"Using output: {out_name}")
+    print("Press Ctrl+C to exit.\n")
+
+    press_mgr = PressManager()
+
+    with mido.open_input(in_name) as in_port, mido.open_output(out_name) as out_port:
+        sm = Apc40StateMachine(runtime, out_port)
+        try:
+            while True:
+                now = time.monotonic()
+
+                # Process incoming messages
+                for msg in in_port.iter_pending():
+                    handle_midi_message(msg, runtime, sm, press_mgr, now)
+
+                # Resolve pending single-clicks (short presses)
+                for key, pt in press_mgr.poll(now):
+                    dispatch_press(key, pt, runtime, sm)
+
+                # Update blinking LEDs
+                sm.update_blink(now)
+
+                time.sleep(0.001)
+        except KeyboardInterrupt:
+            print("\nExiting.")
 
 
 if __name__ == "__main__":
