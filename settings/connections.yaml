@@ -1,8 +1,8 @@
-# connections.yaml
+# connections.yaml (method → software → from/to)
 
-inputs:
-  http:
-    resolume_arena:
+http:
+  resolume_arena:
+    from:
       - name: "arena_http_in_local"
         host: "127.0.0.1"
         port: 8080
@@ -10,42 +10,7 @@ inputs:
         api_base: "/api/v1"
         timeout: 2.0
 
-  osc:
-    show_bridge:
-      - name: "sb_osc_in_local"
-        host: "127.0.0.1"
-        port: 13001      # port we LISTEN on for incoming OSC
-    resolume_arena:
-      - name: "arena_osc_in_local"
-        host: "127.0.0.1"
-        port: 7001      # port we LISTEN on for incoming OSC
-        direction: "input"   # optional: "input" vs "output"
-    resolume_wire:
-      - name: "wire_osc_in"
-        host: "127.0.0.1"
-        port: 9001
-        direction: "input"
-    touchdesigner:
-      - name: "td_osc_in"
-        host: "127.0.0.1"
-        port: 11001
-        direction: "input"
-    synesthesia:
-      - name: "syn_osc_in"
-        host: "127.0.0.1"
-        port: 12000
-        direction: "input"
-    
-  midi:
-    controllers:
-      - name: "Akai APC40"
-        midi_in_port: "APC40 mk1"      # as seen in mido.get_input_names()
-        midi_out_port: "APC40 mk1"     # as seen in mido.get_output_names()
-      # you can add other controllers here
-
-outputs:
-  http:
-    resolume_arena:
+    to:
       - name: "arena_http_out_main"
         host: "127.0.0.1"
         port: 8080
@@ -54,36 +19,71 @@ outputs:
         timeout: 2.0
 
 
-  osc:
-    show_bridge:
+osc:
+  show_bridge:
+    from:
+      - name: "sb_osc_in_local"
+        host: "127.0.0.1"
+        port: 13001  # port we LISTEN on for incoming OSC
+
+    to:
       - name: "sb_osc_out_local"
         host: "127.0.0.1"
-        port: 13000      # port we SEND outgoing OSC to
-        direction: "output"
-    resolume_arena:
+        port: 13000  # port we SEND outgoing OSC to
+
+  resolume_arena:
+    from:
+      - name: "arena_osc_in_local"
+        host: "127.0.0.1"
+        port: 7001   # port we LISTEN on for incoming OSC
+
+    to:
       - name: "arena_osc_out_local"
         host: "127.0.0.1"
-        port: 7000      # port ARENA listens on
-        direction: "output"
-    resolume_wire:
+        port: 7000   # port ARENA listens on
+
+  resolume_wire:
+    from:
+      - name: "wire_osc_in"
+        host: "127.0.0.1"
+        port: 9001
+
+    to:
       - name: "wire_osc_out"
         host: "127.0.0.1"
         port: 9000
-        direction: "output"
-    touchdesigner:
+
+  touchdesigner:
+    from:
+      - name: "td_osc_in"
+        host: "127.0.0.1"
+        port: 11001
+
+    to:
       - name: "td_osc_out"
         host: "127.0.0.1"
         port: 11000
-        direction: "output"
-    synesthesia:
+
+  synesthesia:
+    from:
+      - name: "syn_osc_in"
+        host: "127.0.0.1"
+        port: 12000
+
+    to:
       - name: "syn_osc_out"
         host: "127.0.0.1"
         port: 12001
-        direction: "output"
 
-  midi:
-    devices:
-      - name: "APC40_out"
-        midi_out_port: "APC40 mk1"
+
+midi:
+  controllers:
+    from:
+      - name: "Akai APC40"
+        midi_in_port: "APC40 mk1"   # as seen in mido.get_input_names()
+
+    to:
+      - name: "Akai APC40"
+        midi_out_port: "APC40 mk1"  # as seen in mido.get_output_names()
       - name: "VirtualBus"
         midi_out_port: "LoopMIDI Port 1"
