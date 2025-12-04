@@ -186,9 +186,13 @@ state_mappings:
         action: toggle_property
 
       # clip_row_1 toggles FFT mask
-      fft_mask:
+      dynamic_masks:
         control: clip_row_1
-        action: toggle_property
+        action: handle_property_press
+        args:
+          property_name: dynamic_masks
+          role: dynamic_masks
+          group_apc_index: "{{ group_apc_index }}"
 
       # Arm toggles color
       color:

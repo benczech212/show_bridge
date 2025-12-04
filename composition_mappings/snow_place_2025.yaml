@@ -15,9 +15,10 @@ apc_groups:
 # Optionally: expected layer role names inside groups.
 # These help us categorize layers, but are not strictly required.
 layer_roles:
-  colors: ["Colors", "Colour", "Color"]
-  transforms: ["Transforms", "Transform"]
-  effects: ["Effects", "FX"]
-  fills: ["Fills 1", "Fills 2", "Fills", "Fill"]
-  dynamic_masks: ["Dynamic Masks", "FFT Masks"]
+  colors: ["Color", "Colors", "Colour", "Colours"]
+  transforms: ["Transform", "Transforms"]
+  effects: ["Effects"]
+  fills: ["Fill", "Fills", "Background"]
+  dynamic_masks: ["FFT Masks", "Dynamic Masks", "FFT Mask"]
   static_masks: ["Static Masks", "Masks"]
+  routing: ["Router", "Routing"]

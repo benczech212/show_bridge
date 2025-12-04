@@ -11,6 +11,10 @@ inputs:
         timeout: 2.0
 
   osc:
+    show_bridge:
+      - name: "sb_osc_in_local"
+        host: "127.0.0.1"
+        port: 13001      # port we LISTEN on for incoming OSC
     resolume_arena:
       - name: "arena_osc_in_local"
         host: "127.0.0.1"
@@ -26,7 +30,12 @@ inputs:
         host: "127.0.0.1"
         port: 11001
         direction: "input"
-
+    synesthesia:
+      - name: "syn_osc_in"
+        host: "127.0.0.1"
+        port: 12000
+        direction: "input"
+    
   midi:
     controllers:
       - name: "Akai APC40"
@@ -44,7 +53,13 @@ outputs:
         api_base: "/api/v1"
         timeout: 2.0
 
+
   osc:
+    show_bridge:
+      - name: "sb_osc_out_local"
+        host: "127.0.0.1"
+        port: 13000      # port we SEND outgoing OSC to
+        direction: "output"
     resolume_arena:
       - name: "arena_osc_out_local"
         host: "127.0.0.1"
@@ -59,6 +74,11 @@ outputs:
       - name: "td_osc_out"
         host: "127.0.0.1"
         port: 11000
+        direction: "output"
+    synesthesia:
+      - name: "syn_osc_out"
+        host: "127.0.0.1"
+        port: 12001
         direction: "output"
 
   midi:

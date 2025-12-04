@@ -1,0 +1,24 @@
+composition_name: "Lake Vista Backyard"
+
+# Map APC output group indices (1–8) to Resolume group *names*.
+# We'll resolve these names against the composition JSON's layergroups.
+apc_groups:
+  1: "Snow"
+  # 2: "Lights"
+  # 3: "Columns"
+  # 4: "Windows"
+  # 5: "Mix"
+  # 6: "Brick"
+  7: "Wireframe"
+  8: "Synestesia"
+
+# Optionally: expected layer role names inside groups.
+# These help us categorize layers, but are not strictly required.
+layer_roles:
+  colors: ["Color", "Colors", "Colour", "Colours"]
+  transforms: ["Transform", "Transforms"]
+  effects: ["Effects"]
+  fills: ["Fill", "Fills", "Background"]
+  dynamic_masks: ["FFT Masks", "Dynamic Masks", "FFT Mask"]
+  static_masks: ["Static Masks", "Masks"]
+  routing: ["Router", "Routing"]
