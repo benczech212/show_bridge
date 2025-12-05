@@ -120,12 +120,17 @@ input_mappings:
       stop: { note: 92, channel: 0 }
       rec:  { note: 93, channel: 0 }
 
-    # Global slider at bottom-right
+    # Master slider at right of all groups
     global_slider:
-      cc: 15
+      cc: 14
       channel: 0
 
-
+    horizontal_slider:
+      cc: 15
+      channel: 0
+    vertical_slider:
+      cc: 47
+      channel: 1
 
   # -----------------------------------
   # Velocity mappings (per note / range)

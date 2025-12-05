@@ -796,6 +796,8 @@ class ButtonPressState:
     last_down: float = 0.0
     pending_click: bool = False
     pending_click_time: float = 0.0
+    # Track the number of quick taps registered (used for double/triple detection)
+    click_count: int = 0
 
 
 @dataclass
@@ -839,26 +841,41 @@ class PressManager:
         st = self.states.setdefault(key, ButtonPressState())
 
         if msg.type == "note_on" and msg.velocity > 0:
+            # Key down event
             if not st.is_down:
                 st.is_down = True
                 st.last_down = now
 
         elif msg.type in ("note_off",) or (msg.type == "note_on" and msg.velocity == 0):
+            # Key up event
             if not st.is_down:
                 return events
             st.is_down = False
             duration = now - st.last_down
 
+            # Long press overrides any pending clicks
             if duration >= self.long_threshold:
                 st.pending_click = False
+                st.click_count = 0
                 events.append((key, "long"))
             else:
+                # Quick tap: accumulate click count
+                # If there is an existing pending click within the window, accumulate
                 if st.pending_click and (now - st.pending_click_time) <= self.double_window:
-                    st.pending_click = False
-                    events.append((key, "double"))
+                    st.click_count += 1
+                    # Triple tap: trigger immediately
+                    if st.click_count >= 3:
+                        st.pending_click = False
+                        st.click_count = 0
+                        events.append((key, "triple"))
+                    else:
+                        # Update pending click timestamp for possible triple
+                        st.pending_click_time = now
                 else:
+                    # Either first tap or previous window expired: start new pending click
                     st.pending_click = True
                     st.pending_click_time = now
+                    st.click_count = 1
 
         return events
 
@@ -870,8 +887,14 @@ class PressManager:
         events: list[Tuple[MidiKey, str]] = []
         for key, st in self.states.items():
             if st.pending_click and (now - st.pending_click_time) > self.double_window:
+                # Window expired: dispatch pending click based on accumulated count
+                if st.click_count == 1:
+                    events.append((key, "short"))
+                elif st.click_count == 2:
+                    events.append((key, "double"))
+                # Reset
                 st.pending_click = False
-                events.append((key, "short"))
+                st.click_count = 0
         return events
 
 
@@ -1424,6 +1447,9 @@ class Apc40StateMachine:
 
         self.global_autopilot: bool = True
         self.global_intensity_scale = 1.0
+        # Master composition opacity (0–1).  The APC master slider maps to this value.
+        # This is separate from global_intensity_scale so intensity scaling logic can remain untouched.
+        self.global_opacity = 1.0
         self.global_queue_level: int = 0
 
         # Per-layer runtime state keyed by global layer index
@@ -1460,8 +1486,8 @@ class Apc40StateMachine:
             /composition/layers/<layer_index>/clips/<clip_index>/connect
 
         We treat:
-          - clip_index == 1  -> layer OFF
-          - clip_index >= 2  -> layer ON
+        - clip_index == 1  -> layer OFF
+        - clip_index >= 2  -> layer ON
 
         osc_layer_index is 1-based across all layers in the composition.
         This maps directly to our LayerInfo.global_index + 1.
@@ -1483,12 +1509,36 @@ class Apc40StateMachine:
             )
             return
 
+        # --- Resolve LayerInfo + ClipInfo for debug names ---
+        layer_info = None
+        for group in self.composition.groups:
+            for layer in group.layers:
+                if layer.global_index == global_layer_index:
+                    layer_info = layer
+                    break
+            if layer_info is not None:
+                break
+
+        layer_name = layer_info.name if layer_info is not None else "<unknown layer>"
+
+        clip_info = None
+        if layer_info is not None:
+            for c in layer_info.clips:
+                if c.column_index == osc_clip_index:
+                    clip_info = c
+                    break
+
+        clip_name = clip_info.name if clip_info is not None else "<unknown clip>"
+
+        # --- Update runtime state ---
         layer_state = self.layer_states.setdefault(global_layer_index, LayerRuntimeState())
         layer_state.current_clip_index = osc_clip_index
         layer_state.playing = bool(osc_clip_index >= 2)
 
         print(
-            f"[OSC-IN] Clip connect: layer={osc_layer_index}, clip={osc_clip_index} "
+            "[OSC-IN] Clip connect: "
+            f"layer={osc_layer_index} '{layer_name}', "
+            f"clip={osc_clip_index} '{clip_name}' "
             f"-> playing={layer_state.playing}"
         )
 
@@ -2261,6 +2311,82 @@ class Apc40StateMachine:
             # Don't let file I/O errors disrupt the state machine; just log.
             print(f"[STATE] WARNING: failed to save current state to JSON: {e}")
 
+        # After persisting the state, emit OSC feedback about the updated state.
+        try:
+            self.send_state_update()
+        except Exception as e:
+            print(f"[STATE] WARNING: failed to send state update via OSC: {e}")
+
+    def send_state_update(self) -> None:
+        """
+        Emit OSC messages describing the current state of the controller.  The
+        address format follows:
+
+          /show_controller/v1/state/group/<group_index>/<property>/clip_name  (string)
+          /show_controller/v1/state/group/<group_index>/<property>/status     (bool/int)
+          /show_controller/v1/state/group/<group_index>/<property>/autopilot  (bool/int)
+          /show_controller/v1/state/group/<group_index>/opacity               (float)
+          /show_controller/v1/state/group/<group_index>/intensity             (float)
+          /show_controller/v1/state/global/opacity                            (float)
+          /show_controller/v1/state/global/autopilot                          (bool/int)
+
+        Properties include playing, color, effects, transforms and dynamic_masks.
+        Clip names are determined per role based on the first layer in that role
+        which currently has a clip index.  If no clip is active or the clip
+        index corresponds to OFF/PASSTHROUGH, an empty string is emitted.
+        """
+        # Do nothing if no OSC client is configured
+        if self.osc_client is None:
+            return
+
+        for gi, g in enumerate(self.groups):
+            group_index = gi + 1
+
+            # Loop over boolean properties
+            for prop in self.BOOL_PROPS:
+                # Determine a representative clip name for this property
+                clip_name = ""
+                if prop != "playing":
+                    role = self.PROP_TO_ROLE.get(prop)
+                    if role:
+                        # APC group indices are 1-based
+                        apc_index = group_index
+                        role_layers = self.group_role_layers.get(apc_index, {}).get(role, [])
+                        for layer in role_layers:
+                            state = self.layer_states.get(layer.global_index)
+                            if state and state.current_clip_index:
+                                # Look up clip info
+                                col = state.current_clip_index
+                                # Skip OFF/PASSTHROUGH (1 or 2)
+                                if col <= 2:
+                                    continue
+                                for clip in layer.clips:
+                                    if clip.column_index == col:
+                                        clip_name = clip.name
+                                        break
+                                if clip_name:
+                                    break
+
+                # Compose and send OSC addresses
+                base = f"/show_controller/v1/state/group/{group_index}/{prop}"
+                # Clip name (string)
+                self.send_osc(base + "/clip_name", clip_name)
+                # Status (bool as int)
+                status_val = getattr(g, prop)
+                self.send_osc(base + "/status", int(bool(status_val)))
+                # Autopilot flag
+                autopilot_attr = f"{prop}_autopilot"
+                autopilot_val = getattr(g, autopilot_attr, True)
+                self.send_osc(base + "/autopilot", int(bool(autopilot_val)))
+
+            # Group-level numeric values
+            self.send_osc(f"/show_controller/v1/state/group/{group_index}/opacity", float(g.opacity))
+            self.send_osc(f"/show_controller/v1/state/group/{group_index}/intensity", float(g.intensity))
+
+        # Global values
+        self.send_osc("/show_controller/v1/state/global/opacity", float(self.global_opacity))
+        self.send_osc("/show_controller/v1/state/global/autopilot", int(bool(self.global_autopilot)))
+
 
     def _init_intensity_preset_leds(self):
         for gi in range(len(self.groups)):
@@ -2296,6 +2422,24 @@ class Apc40StateMachine:
 
         elif press_type == "double":
             self.toggle_autopilot(group_idx, prop)
+        elif press_type == "triple":
+            # Triple tap: toggle this property and propagate the same state to all groups
+            # Determine the new value by flipping the current value of the pressed group
+            new_val = not value
+            print(
+                f"[STATE] Triple press on group {group_idx + 1} {prop} -> propagate {new_val}" +
+                f" to all groups"
+            )
+            for gi in range(len(self.groups)):
+                # Only run autoplay when turning on and the previous state was off
+                prev_val = getattr(self.groups[gi], prop)
+                if prev_val != new_val:
+                    self.set_property(gi, prop, new_val)
+                    # If turning on, kick off appropriate autoplay
+                    if new_val:
+                        self._handle_after_toggle_on(gi, prop)
+                # Update LEDs for this property
+                self._update_led_for_property(gi, prop)
     def _handle_after_toggle_on(self, group_idx: int, prop: str) -> None:
         """
         Called after a property is turned ON (False -> True).
@@ -2478,13 +2622,27 @@ class Apc40StateMachine:
             self.midi_out.send(msg)
 
     def set_global_intensity_from_cc(self, value: int):
+        # Interpret the master slider CC value as a global opacity/intensity control.
+        # Clamp 0–1, update both intensity_scale and master composition opacity.
         v = max(0.0, min(1.0, value / 127.0))
         self.global_intensity_scale = v
+        self.global_opacity = v
         print(f"[STATE] Global intensity -> {v:.3f}")
-
+        print(f"[STATE] Global opacity -> {v:.3f}")
         # Drive Resolume master opacity via OSC:
         #   /composition/master
         self.send_osc("/composition/master", float(v))
+
+    # Alias: master slider controlling composition opacity.  For clarity, provide a separate
+    # method name that maps to the same underlying logic.
+    def set_global_opacity_from_cc(self, value: int):
+        """
+        Set the global composition opacity from a MIDI CC value (0–127).
+        Updates both global_opacity and global_intensity_scale so that
+        intensity calculations continue to work as before.  Sends the
+        appropriate OSC command to control Resolume's composition master.
+        """
+        self.set_global_intensity_from_cc(value)
 
     def toggle_effects_all(self):
         any_on = any(g.effects for g in self.groups)
@@ -2503,7 +2661,13 @@ class Apc40StateMachine:
                 self._update_led_for_property(gi, prop)
 
     def set_global_autopilot_on(self):
-        self.set_global_autopilot(True)
+        # If already on, trigger a global advance instead of re-enabling
+        if self.global_autopilot:
+            print("[STATE] Global autopilot already ON – advancing clips")
+            # Run a single autopilot cycle to advance content
+            self.global_next_clip()
+        else:
+            self.set_global_autopilot(True)
 
     def set_global_autopilot_off(self):
         self.set_global_autopilot(False)
@@ -2556,6 +2720,42 @@ class Apc40StateMachine:
         print("[STATE] Global tempo sync requested")
         self._osc_pulse("/composition/tempocontroller/resync", 1.0, 0.0)
 
+    def global_next_clip(self) -> None:
+        """
+        Advance to the next clip across all groups.
+
+        This reuses the autopilot cycle logic to trigger the next roll on all
+        currently active properties.  If global_autopilot is disabled, it will
+        temporarily enable it for a single cycle.
+        """
+        print("[STATE] Global next clip requested")
+        # Temporarily force-run one autopilot cycle regardless of global_autopilot
+        prev = self.global_autopilot
+        self.global_autopilot = True
+        try:
+            self._run_autopilot_cycle()
+        finally:
+            # Restore previous autopilot state
+            self.global_autopilot = prev
+
+    def global_previous_clip(self) -> None:
+        """
+        Go back to the previous clip across all groups.
+
+        Resolume does not natively support a "previous clip" across all layers,
+        so this implementation simply triggers another autopilot cycle, which
+        will select new clips.  This behaviour effectively mimics stepping
+        backward by re-rolling content.  A future implementation could
+        maintain a history of clip selections to truly step backwards.
+        """
+        print("[STATE] Global previous clip requested")
+        prev = self.global_autopilot
+        self.global_autopilot = True
+        try:
+            self._run_autopilot_cycle()
+        finally:
+            self.global_autopilot = prev
+
     def scroll_clips_horizontal(self, step: float):
         """
         Scroll clips horizontally via:
@@ -2565,6 +2765,44 @@ class Apc40StateMachine:
         """
         print(f"[STATE] Scroll clips horizontally step={step}")
         self.send_osc("/application/ui/clipsscrollhorizontal", float(step))
+
+    def scroll_clips_vertical(self, step: float):
+        """
+        Scroll clips vertically via:
+          /application/ui/clipsscrollvertical
+
+        `step` is user-defined; typical values might be -1.0, +1.0, etc.
+        """
+        print(f"[STATE] Scroll clips vertically step={step}")
+        self.send_osc("/application/ui/clipsscrollvertical", float(step))
+
+    def scroll_h_from_cc(self, value: int) -> None:
+        """
+        Convert a MIDI CC value (0–127) into a horizontal scroll step and send it.
+
+        We map the 0..127 range to -1..+1 linearly, with 64 roughly as 0.
+        Values near the centre produce no scroll.
+        """
+        # Normalise 0–127 to 0–1
+        norm = max(0.0, min(1.0, value / 127.0))
+        step = (norm * 2.0) - 1.0
+        # Deadband around zero to avoid jitter when slider is near the middle
+        if abs(step) < 0.1:
+            step = 0.0
+        self.scroll_clips_horizontal(step)
+
+    def scroll_v_from_cc(self, value: int) -> None:
+        """
+        Convert a MIDI CC value (0–127) into a vertical scroll step and send it.
+
+        We map the 0..127 range to -1..+1 linearly, with 64 roughly as 0.
+        Values near the centre produce no scroll.
+        """
+        norm = max(0.0, min(1.0, value / 127.0))
+        step = (norm * 2.0) - 1.0
+        if abs(step) < 0.1:
+            step = 0.0
+        self.scroll_clips_vertical(step)
 
     # -------------------------------------------------------------------
     # Persistence helpers
@@ -2843,6 +3081,8 @@ IMMEDIATE_GLOBAL_ACTIONS = {
     "tempo_sync",
     "set_global_autopilot_on",
     "set_global_autopilot_off",
+    "global_previous_clip",
+    "global_next_clip",
     # New immediate actions: resync the composition from Resolume and record the
     # current state (e.g. REC button functionality). These actions fire
     # immediately on note_on and do not depend on short/long/double press.
@@ -2875,6 +3115,10 @@ def handle_immediate_global_action(spec: ActionSpec, sm: Apc40StateMachine):
         # Persist the current state machine snapshot and register a vote for
         # this combination.  Typically mapped to the REC button.
         sm.record_current_state_and_vote()
+    elif action == "global_previous_clip":
+        sm.global_previous_clip()
+    elif action == "global_next_clip":
+        sm.global_next_clip()
 
 
 def handle_midi_message(msg: mido.Message,
@@ -2905,6 +3149,17 @@ def handle_midi_message(msg: mido.Message,
             sm.set_opacity_from_cc(spec.group_index, msg.value)
         elif spec.scope == "global" and spec.action == "set_global_intensity_from_cc":
             sm.set_global_intensity_from_cc(msg.value)
+        elif spec.scope == "global" and spec.action == "set_global_opacity_from_cc":
+            sm.set_global_opacity_from_cc(msg.value)
+        elif spec.scope == "global" and spec.action in ("scroll_clips_horizontal", "scroll_h_from_cc"):
+            sm.scroll_h_from_cc(msg.value)
+        elif spec.scope == "global" and spec.action in ("scroll_clips_vertical", "scroll_v_from_cc"):
+            sm.scroll_v_from_cc(msg.value)
+        elif spec.scope == "global" and spec.action == "global_previous_clip":
+            # Trigger previous clip on value movement; we ignore the CC value
+            sm.global_previous_clip()
+        elif spec.scope == "global" and spec.action == "global_next_clip":
+            sm.global_next_clip()
 
 
 def dispatch_press(key: MidiKey,
@@ -3344,26 +3599,41 @@ def main(argv: Optional[List[str]] = None):
 
     press_mgr = PressManager()
 
-    # ---- Safer MIDI port opening with diagnostics ----
-    try:
-        in_port = mido.open_input(in_name)
-    except Exception as e:
-        print(f"[MIDI] ERROR opening input port '{in_name}': {e}")
-        print("[MIDI] Available input ports:")
-        for i, name in enumerate(mido.get_input_names()):
-            print(f"  [{i}] {name}")
-        raise
+    # ---- MIDI port opening with reconnect logic ----
+    in_port = None
+    out_port = None
+    attempt = 0
+    while True:
+        try:
+            # Refresh available port lists on each attempt
+            midi_input_names = mido.get_input_names()
+            midi_output_names = mido.get_output_names()
+            # Attempt to auto-select ports again in case device names changed
+            in_name = auto_select_port(midi_input_names, controller_name, "input")
+            out_name = auto_select_port(midi_output_names, controller_name, "output")
 
-    try:
-        out_port = mido.open_output(out_name)
-    except Exception as e:
-        print(f"[MIDI] ERROR opening output port '{out_name}': {e}")
-        print("[MIDI] Available output ports:")
-        for i, name in enumerate(mido.get_output_names()):
-            print(f"  [{i}] {name}")
-        # Close input if we opened it successfully
-        in_port.close()
-        raise
+            in_port = mido.open_input(in_name)
+            out_port = mido.open_output(out_name)
+            break  # success
+        except Exception as e:
+            # Close any ports that may have opened before error
+            try:
+                if in_port:
+                    in_port.close()
+            except Exception:
+                pass
+            try:
+                if out_port:
+                    out_port.close()
+            except Exception:
+                pass
+
+            attempt += 1
+            delay = 5 if attempt == 1 else 10
+            print(f"[MIDI] WARNING: could not open MIDI ports ('{in_name}', '{out_name}'): {e}")
+            print(f"[MIDI] Will retry in {delay} seconds... (attempt {attempt})")
+            time.sleep(delay)
+            continue
 
     try:
         with in_port, out_port:
@@ -3382,6 +3652,11 @@ def main(argv: Optional[List[str]] = None):
                 sm.attach_composition(comp_model, comp_mapping)
                 # Initialize state/LEDs from current Resolume composition
                 sm.initialize_state_from_composition()
+                # Emit an initial state update so listeners have baseline values
+                try:
+                    sm.send_state_update()
+                except Exception as e:
+                    print(f"[MONITOR] WARNING: failed to send initial state update: {e}")
 
             # Start the monitoring server for real-time state visualization
             try:
