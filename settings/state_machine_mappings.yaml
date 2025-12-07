@@ -1,0 +1,28 @@
+outputs:
+  group:
+    boolean:
+      # already existing enabled flags
+      playing:         "/state/group/{group}/playing/enabled"
+      effects:         "/state/group/{group}/effects/enabled"
+      transforms:      "/state/group/{group}/transforms/enabled"
+      dynamic_masks:   "/state/group/{group}/dynamic_masks/enabled"
+      color:           "/state/group/{group}/color/enabled"
+
+      # NEW: per-role autopilot flags
+      playing_autopilot:       "/state/group/{group}/playing/autopilot"
+      effects_autopilot:       "/state/group/{group}/effects/autopilot"
+      transforms_autopilot:    "/state/group/{group}/transforms/autopilot"
+      dynamic_masks_autopilot: "/state/group/{group}/dynamic_masks/autopilot"
+      color_autopilot:         "/state/group/{group}/color/autopilot"
+
+    float:
+      opacity:   "/state/group/{group}/opacity"
+      intensity: "/state/group/{group}/intensity"
+
+    string:
+      # NEW: clip names per role
+      playing_name:       "/state/group/{group}/playing/name"
+      effects_name:       "/state/group/{group}/effects/name"
+      transforms_name:    "/state/group/{group}/transforms/name"
+      dynamic_masks_name: "/state/group/{group}/dynamic_masks/name"
+      color_name:         "/state/group/{group}/color/name"

@@ -23,13 +23,13 @@ osc:
   show_bridge:
     from:
       - name: "sb_osc_in_local"
-        host: "127.0.0.1"
-        port: 13001  # port we LISTEN on for incoming OSC
+        host: "0.0.0.0"
+        port: 13000  # port we LISTEN on for incoming OSC
 
     to:
       - name: "sb_osc_out_local"
         host: "127.0.0.1"
-        port: 13000  # port we SEND outgoing OSC to
+        port: 13001  # port we SEND outgoing OSC to
 
   resolume_arena:
     from:
@@ -39,7 +39,7 @@ osc:
 
     to:
       - name: "arena_osc_out_local"
-        host: "127.0.0.1"
+        host: "0.0.0.0"
         port: 7000   # port ARENA listens on
 
   resolume_wire:
@@ -50,7 +50,7 @@ osc:
 
     to:
       - name: "wire_osc_out"
-        host: "127.0.0.1"
+        host: "0.0.0.0"
         port: 9000
 
   touchdesigner:
@@ -61,7 +61,7 @@ osc:
 
     to:
       - name: "td_osc_out"
-        host: "127.0.0.1"
+        host: "0.0.0.0"
         port: 11000
 
   synesthesia:
@@ -72,7 +72,7 @@ osc:
 
     to:
       - name: "syn_osc_out"
-        host: "127.0.0.1"
+        host: "0.0.0.0"
         port: 12001
 
 
