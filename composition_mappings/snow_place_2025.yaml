@@ -1,4 +1,5 @@
 composition_name: "Snow Place 2025"
+composition_file: "Snow Place 2025.avc"
 
 # Map APC output group indices (1–8) to Resolume group *names*.
 # We'll resolve these names against the composition JSON's layergroups.

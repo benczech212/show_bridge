@@ -1,0 +1,35 @@
+# Color mappings for ShowBridge logging
+# Colors are ANSI codes (without the ESC/\x1b prefix). Choose from standard
+# colors like 30-37, bright 90-97, or others supported by your terminal.
+
+level_colors:
+  DEBUG: "36"
+  INFO: "32"
+  WARNING: "33"
+  ERROR: "31"
+  CRITICAL: "35"
+
+program_colors:
+  ARENA: "34"
+  WIRE: "35"
+  SYN: "36"
+  BRIDGE: "37"
+  TD: "32"
+
+category_colors:
+  OSC: "36"
+  INIT: "35"
+  MIDI: "33"
+  HTTP: "34"
+  STATE: "37"
+  MONITOR: "33"
+
+category_palette:
+  - "90"
+  - "91"
+  - "92"
+  - "93"
+  - "94"
+  - "95"
+  - "96"
+  - "37"

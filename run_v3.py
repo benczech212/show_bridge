@@ -91,6 +91,8 @@ from pathlib import Path
 from typing import Dict, Tuple, Any, List, Optional
 
 import mido
+import re
+from lib.show_bridge_logging import setup_logging, sb_log
 import yaml
 import requests
 from pythonosc.udp_client import SimpleUDPClient
@@ -130,76 +132,31 @@ ORANGE_VELOCITY = 5  # typical: amber/orange
 #   column 3+ = actual clip content
 FIRST_CONTENT_COLUMN = 3
 
+# ------------------------------------------------------------
+# OSC server registry (avoid double-binding same host/port)
+# ------------------------------------------------------------
+_transport_osc_servers = {}
+_transport_osc_servers_lock = threading.Lock()
+# General OSC server registry (for non-transport servers)
+_osc_servers: Dict[Tuple[str, int], ThreadingOSCUDPServer] = {}
+_osc_servers_lock = threading.Lock()
 
-
-def setup_logging(level: int = logging.INFO) -> logging.Logger:
-    """
-    Configure application-wide logging.
-
-    - Master log: logs/show_bridge.log
-    - OSC logs:
-        logs/osc/resolume_out.log
-        logs/osc/resolume_in.log
-        logs/osc/synesthesia_out.log
-        logs/osc/show_bridge_out.log
-    """
-    LOG_DIR.mkdir(exist_ok=True)
-    OSC_LOG_DIR.mkdir(parents=True, exist_ok=True)
-
-    # Root app logger
-    logger = logging.getLogger("show_bridge")
-    logger.setLevel(level)
-
-    fmt = logging.Formatter(
-        "%(asctime)s [%(levelname)s] %(name)s - %(message)s",
-        "%Y-%m-%d %H:%M:%S",
-    )
-
-    # Console handler
-    ch = logging.StreamHandler()
-    ch.setLevel(level)
-    ch.setFormatter(fmt)
-    logger.addHandler(ch)
-
-    # Master rotating file handler
-    master_path = LOG_DIR / "show_bridge.log"
-    fh = RotatingFileHandler(
-        master_path,
-        maxBytes=5 * 1024 * 1024,
-        backupCount=3,
-        encoding="utf-8",
-    )
-    fh.setLevel(level)
-    fh.setFormatter(fmt)
-    logger.addHandler(fh)
-
-    # Per-OSC loggers (program + direction)
-    osc_loggers = {
-        "osc.resolume.out": OSC_LOG_DIR / "resolume_out.log",
-        "osc.resolume.in": OSC_LOG_DIR / "resolume_in.log",
-        "osc.synesthesia.out": OSC_LOG_DIR / "synesthesia_out.log",
-        "osc.show_bridge.out": OSC_LOG_DIR / "show_bridge_out.log",
-        "osc.show_bridge.in": OSC_LOG_DIR / "show_bridge_in.log",   # <--- add this
-    }
-
-
-    for name, path in osc_loggers.items():
-        l = logging.getLogger(name)
-        l.setLevel(level)
-        fh2 = RotatingFileHandler(
-            path,
-            maxBytes=2 * 1024 * 1024,
-            backupCount=5,
-            encoding="utf-8",
-        )
-        fh2.setLevel(level)
-        fh2.setFormatter(fmt)
-        l.addHandler(fh2)
-        # Let these also propagate up to the master logger
-        l.propagate = True
-
-    return logger
-
+# OSC client registry to avoid creating multiple UDP clients to same host/port
+_osc_clients: Dict[Tuple[str, int], SimpleUDPClient] = {}
+_osc_clients_lock = threading.Lock()
+def get_osc_client(host: str, port: int) -> SimpleUDPClient:
+    """Return a shared SimpleUDPClient for (host,port), creating it if needed."""
+    key = (host, int(port))
+    with _osc_clients_lock:
+        client = _osc_clients.get(key)
+        if client is None:
+            client = SimpleUDPClient(host, int(port))
+            _osc_clients[key] = client
+    return client
+"""
+Logging implementation moved to `show_bridge_logging.py`.
+Import `setup_logging` and `sb_log` from that module instead of using local definitions.
+"""
 
 # =========================================================
 # Resolume composition + mapping model
@@ -402,8 +359,7 @@ def _match_layer_role(layer_name: str, mapping: CompositionMapping) -> Optional[
     return None
 
 def debug_dump_composition_columns(comp: CompositionInfo, logger) -> None:
-    
-    logger.info(f"[DEBUG] Composition '{comp.name}' column layout:")
+    sb_log(logger,logging.DEBUG,"ARENA","INIT",f"Composition '{comp.name}' column layout:")
     for g in comp.groups:
         apc_str = f"APC={g.apc_group_index}" if g.apc_group_index is not None else "APC=-"
         logger.info (f"  Group {g.index_in_composition} '{g.name}' ({apc_str})")
@@ -1592,13 +1548,13 @@ class Apc40StateMachine:
 
             # OSC client (Resolume control)
             osc_host, osc_port = get_resolume_osc_connection(connections_cfg, name=None, io_section="outputs")
-            osc_client = SimpleUDPClient(osc_host, osc_port)
+            osc_client = get_osc_client(osc_host, osc_port)
             self.logger.info(f"[OSC] Using Resolume OSC at {osc_host}:{osc_port}")
 
             # OSC client (show_bridge telemetry / state broadcast)
             try:
                 sb_host, sb_port = get_show_bridge_osc_connection(connections_cfg, name=None, io_section="outputs")
-                sb_osc_client = SimpleUDPClient(sb_host, sb_port)
+                sb_osc_client = get_osc_client(sb_host, sb_port)
                 self.logger.info(f"[OSC] Using show_bridge OSC at {sb_host}:{sb_port} for state broadcasts")
             except Exception as sb_e:
                 self.logger.warning(f"[OSC] WARNING: could not initialize show_bridge OSC: {sb_e}")
@@ -1607,14 +1563,14 @@ class Apc40StateMachine:
             # OSC client (Synesthesia) - optional
             try:
                 syn_host, syn_port = get_synesthesia_osc_connection(connections_cfg, name=None, io_section="outputs")
-                syn_osc_client = SimpleUDPClient(syn_host, syn_port)
+                syn_osc_client = get_osc_client(syn_host, syn_port)
                 self.logger.info(f"[SYN] Using Synesthesia OSC at {syn_host}:{syn_port}")
             except Exception as syn_e:
                 self.logger.warning(f"[SYN] WARNING: could not initialize Synesthesia OSC: {syn_e}")
                 syn_osc_client = None
 
         except Exception as e:
-            self.logger.warning(f"[RESOLUME] WARNING: could not initialize Resolume composition/OSC: {e}")
+            sb_log(self.logger, logging.WARNING, "BRIDGE", "RESOLUME", f"Could not initialize Resolume composition/OSC: {e}")
             conn_http = None
             osc_client = None
             sb_osc_client = None
@@ -1640,7 +1596,7 @@ class Apc40StateMachine:
                 else:
                     self.state_output_cfg = {}
             except Exception as e:
-                self.logger.warning(f"[STATE-OUTPUT] WARNING: failed to load state-machine output config: {e}")
+                sb_log(self.logger, logging.WARNING, "BRIDGE", "STATE-OUTPUT", f"Failed to load state-machine output config: {e}")
                 self.state_output_cfg = {}
 
         self.groups = [OutputGroupState() for _ in range(8)]
@@ -1695,7 +1651,7 @@ class Apc40StateMachine:
           - logs that we received a mirrored state message
           - (optionally) could be extended to actually *drive* local state.
         """
-        self.logger.debug(f"[STATE-INPUT] External state OSC {address} {args}")
+        sb_log(self.logger, logging.DEBUG, "BRIDGE", "STATE-INPUT", f"External state OSC {address} {args}")
         # For now we treat inbound messages as informational / future hooks.
         # You can later parse /state/group/<g>/<prop> here and mutate self.groups[g-1].
         return
@@ -1725,7 +1681,7 @@ class Apc40StateMachine:
 
         layer_info = self.layer_index_map.get(global_layer_index)
         if not layer_info:
-            self.logger.warning(f"[RESOL-CLIP] Unknown layer index {global_layer_index}")
+            sb_log(self.logger, logging.WARNING, "BRIDGE", "ARENA-CLIP", f"Unknown layer index {global_layer_index}")
             return
 
         layer_state = self.layer_states.setdefault(
@@ -1734,9 +1690,12 @@ class Apc40StateMachine:
         layer_state.current_clip_index = column_index
         layer_state.playing = bool(column_index and column_index >= 2)
 
-        self.logger.info(
-            f"[RESOL-CLIP] Layer {global_layer_index} '{layer_info.name}' "
-            f"-> column={column_index} name={clip_name!r} playing={layer_state.playing}"
+        sb_log(
+            self.logger,
+            logging.INFO,
+            "BRIDGE",
+            "ARENA-CLIP",
+            f"Layer {global_layer_index} '{layer_info.name}' -> column={column_index} name={clip_name!r} playing={layer_state.playing}",
         )
 
         # --- NEW: map this layer back to APC group + role and broadcast clip name ---
@@ -1807,7 +1766,7 @@ class Apc40StateMachine:
         - Called on scene launches.
         """
         if not self.state_output_cfg:
-            self.logger.info("[STATE-OUTPUT] No state output config; skipping full-state broadcast.")
+            sb_log(self.logger, logging.INFO, "BRIDGE", "STATE-OSC", "No state output config; skipping full-state broadcast.")
             return
 
         # 1) Per-group properties (playing/effects/transforms/dynamic_masks/color, opacity, intensity)
@@ -1818,9 +1777,7 @@ class Apc40StateMachine:
                     val = getattr(g, prop)
                     self._broadcast_state_update(group_idx, prop, val)
                 except Exception as e:
-                    self.logger.debug(
-                        f"[STATE-OUTPUT] Failed bool broadcast for group={group_idx+1} prop={prop}: {e}"
-                    )
+                    sb_log(self.logger, logging.WARNING, "BRIDGE", "STATE-OSC", f"Failed bool broadcast for group={group_idx+1} prop={prop}: {e}")
 
                 auto_name = f"{prop}_autopilot"
                 if hasattr(g, auto_name):
@@ -1828,9 +1785,7 @@ class Apc40StateMachine:
                         auto_val = getattr(g, auto_name)
                         self._broadcast_state_update(group_idx, auto_name, auto_val)
                     except Exception as e:
-                        self.logger.debug(
-                            f"[STATE-OUTPUT] Failed autopilot broadcast for group={group_idx+1} prop={auto_name}: {e}"
-                        )
+                        sb_log(self.logger, logging.WARNING, "BRIDGE", "STATE-OSC", f"Failed autopilot broadcast for group={group_idx+1} prop={auto_name}: {e}")
 
             # Scalar props
             for scalar_prop in ("opacity", "intensity"):
@@ -1838,9 +1793,25 @@ class Apc40StateMachine:
                     val = getattr(g, scalar_prop)
                     self._broadcast_state_update(group_idx, scalar_prop, float(val))
                 except Exception as e:
-                    self.logger.debug(
-                        f"[STATE-OUTPUT] Failed scalar broadcast for group={group_idx+1} prop={scalar_prop}: {e}"
-                    )
+                    sb_log(self.logger, logging.WARNING, "BRIDGE", "STATE-OSC", f"Failed scalar broadcast for group={group_idx+1} prop={scalar_prop}: {e}")
+
+            # NEW: broadcast the user-facing group name for each APC row.
+            # Prefer the mapping from composition_mapping.apc_groups (YAML). If
+            # that's not present, fall back to the composition model's group
+            # name. If neither is available, broadcast an empty string.
+            try:
+                apc_index = group_idx + 1
+                group_name = ""
+                if getattr(self, "composition_mapping", None) is not None:
+                    group_name = self.composition_mapping.apc_groups.get(apc_index, "") or ""
+                if not group_name and getattr(self, "composition", None) is not None:
+                    grp = self.composition.group_for_apc(apc_index)
+                    if grp is not None:
+                        group_name = grp.name or ""
+                self._broadcast_state_update(group_idx, "name", group_name)
+            except Exception as e:
+                sb_log(self.logger, logging.WARNING, "BRIDGE", "STATE-OSC", f"Failed name broadcast for group={group_idx+1}: {e}")
+                
 
         # 2) Global props: global_autopilot, global_intensity_scale, global_opacity
         try:
@@ -1857,8 +1828,7 @@ class Apc40StateMachine:
             self._broadcast_state_update(None, "global_opacity", float(self.global_opacity))
         except Exception:
             pass
-
-        self.logger.info("[STATE-OUTPUT] Full state broadcast completed.")
+        sb_log(self.logger, logging.INFO, "BRIDGE", "STATE-OSC", "Full state broadcast completed.")
 
     def on_transport_beat(self, beat_kind: str) -> None:
         """
@@ -1978,12 +1948,12 @@ class Apc40StateMachine:
 
         if self.syn_osc_client is None:
             msg = f"(no client) WOULD SEND {addr} {val!r}"
-            self.logger.warning(f"[SYN] {msg}")
-            self.osc_syn_logger.warning(msg)
+            sb_log(self.logger, logging.WARNING, "BRIDGE", "SYN", msg)
+            sb_log(self.osc_syn_logger, logging.WARNING, "SYN", "OSC", msg)
             return
 
         self.osc_syn_logger.info("SEND %s %r", addr, val)
-        self.logger.info("[SYN] SEND /playlist/next 1.0")
+        sb_log(self.osc_syn_logger, logging.INFO, "SYN", "OSC", f"SEND {addr} {val!r}")
         self.syn_osc_client.send_message(addr, val)
 
     # ---- OSC helpers ----
@@ -1995,19 +1965,68 @@ class Apc40StateMachine:
         """
         if self.osc_client is None:
             msg = f"(no client) WOULD SEND {address} {value!r}"
-            self.logger.warning(f"[OSC] {msg}")
-            self.osc_resolume_logger.warning(msg)
+            sb_log(self.osc_resolume_logger, logging.WARNING, "ARENA", "OSC", msg)
+            # self.osc_resolume_logger.warning(msg)
             return
 
         # Normal path: log + send
         self.osc_resolume_logger.info("SEND %s %r", address, value)
-        self.logger.info(f"[OSC] SEND {address} {value!r}")
+        sb_log(self.osc_resolume_logger, logging.INFO, "ARENA", "OSC", "SEND %s %r", address, value)
 
-        if value is None:
-            self.osc_client.send_message(address, 0.0)
-        else:
-            self.osc_client.send_message(address, value)
+        try:
+            if value is None:
+                self.osc_client.send_message(address, 0.0)
+            else:
+                self.osc_client.send_message(address, value)
 
+        except OSError as e:
+            sb_log(self.osc_resolume_logger, logging.ERROR, "ARENA", "OSC",
+                   "Send failed %s %r: %s", address, value, e)
+        finally:
+            # If we're sending a clip connect command ourselves, proactively
+            # broadcast the clip name to the state bus so consumers see the
+            # change immediately (rather than waiting for Resolume to echo).
+            try:
+                m = re.match(r"^/composition/layers/(\d+)/clips/(\d+)/connect$", address)
+                if m and self.composition is not None:
+                    osc_layer_index = int(m.group(1))
+                    column_index = int(m.group(2))
+                    global_layer_index = osc_layer_index - 1
+
+                    # Resolve layer info -> clip name (if available)
+                    layer_info = self.layer_index_map.get(global_layer_index)
+                    clip_name = ""
+                    if layer_info:
+                        for c in getattr(layer_info, 'clips', []) or []:
+                            if getattr(c, 'column_index', None) == column_index:
+                                clip_name = getattr(c, 'name', '') or ''
+                                break
+
+                    # Map layer -> apc group + role
+                    group_idx_for_state = None
+                    role_for_state = None
+                    for apc_index, role_layers in self.group_role_layers.items():
+                        for role, layers in role_layers.items():
+                            for li in layers:
+                                if li.global_index == global_layer_index:
+                                    group_idx_for_state = apc_index - 1
+                                    role_for_state = role
+                                    break
+                            if role_for_state is not None:
+                                break
+                        if role_for_state is not None:
+                            break
+
+                    if group_idx_for_state is not None and role_for_state is not None:
+                        # Use <role>_name mapping (e.g. playing_name)
+                        prop = f"{role_for_state}_name"
+                        try:
+                            self._broadcast_state_update(group_idx_for_state, prop, clip_name)
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+                   
     def _osc_pulse(self, address: str, value: float = 1.0, off_value: float = 0.0) -> None:
         """
         Send a quick on/off pulse as two OSC messages.
@@ -2020,8 +2039,8 @@ class Apc40StateMachine:
     def initialize_state_from_composition(self) -> None:
         if self.composition is None:
             return
-
         self.logger.info("[INIT] Syncing with composition...")
+        
 
         # Pass 1 — apply per-layer ON/OFF based on active column
         for group in self.composition.groups:
@@ -2071,19 +2090,20 @@ class Apc40StateMachine:
             group:
               boolean: ...
               float: ...
-              string: ...   # <-- NEW for clip names
-
-        For group-level values:
-          - group_idx is 0-based internally; template uses {group} as 1-based.
+              string: ...   # <-- clip names
         """
-
-        if self.state_output_cfg is None:
+        if not self.state_output_cfg:
+            # State output mapping not configured — helpful debug log so
+            # users know why no OSC state messages are emitted.
+            self.logger.debug("[STATE-OUTPUT] State output mapping disabled (no state_output_cfg).")
             return
 
-        # ---------- classify value ----------
-        kind: str
-        send_value: Any
+        # Support both:
+        # - {"outputs": {...}}   (your YAML)
+        # - {"global": ..., "group": ...} (older style)
+        cfg = self.state_output_cfg.get("outputs", self.state_output_cfg)
 
+        # ---------- classify value ----------
         if isinstance(value, bool):
             kind = "boolean"
             send_value = value
@@ -2091,31 +2111,36 @@ class Apc40StateMachine:
             kind = "float"
             send_value = float(value)
         else:
-            # Treat everything else as a string (e.g. clip names)
             kind = "string"
             send_value = str(value)
 
         # ---------- choose mapping section ----------
         if group_idx is None:
             # GLOBAL section (no group index)
-            global_cfg = self.state_output_cfg.get("global", {})
+            global_cfg = cfg.get("global", {})
             role_map = global_cfg.get(kind, {})
             addr_tpl = role_map.get(prop)
             if not addr_tpl:
-                # Silently ignore unknown mappings
+                # Mapping missing for this kind/prop — warn at debug level so
+                # configuration problems are visible without spamming INFO.
+                self.logger.debug(
+                    f"[STATE-OUTPUT] No mapping for group {group_idx + 1} prop={prop} kind={kind} in state_output_cfg"
+                )
                 return
 
             try:
                 addr = addr_tpl.format()
             except Exception:
                 addr = addr_tpl
-
         else:
             # GROUP section (per-APC group)
-            group_cfg = self.state_output_cfg.get("group", {})
+            group_cfg = cfg.get("group", {})
             role_map = group_cfg.get(kind, {})
             addr_tpl = role_map.get(prop)
             if not addr_tpl:
+                self.logger.debug(
+                    f"[STATE-OUTPUT] No mapping for global prop={prop} kind={kind} in state_output_cfg"
+                )
                 return
 
             # internal group_idx is 0-based; mapping uses 1-based {group}
@@ -2127,6 +2152,7 @@ class Apc40StateMachine:
         # ---------- actually send ----------
         self._send_state_osc(addr, send_value)
         self.logger.info(f"[STATE-OUTPUT] {kind} {prop} -> {addr} {send_value!r}")
+
         
     def _send_state_osc(self, address: str, value: Any | None = None) -> None:
         """
@@ -2134,12 +2160,14 @@ class Apc40StateMachine:
         """
         if self.broadcast_osc_client is None:
             msg = f"(no broadcast client) WOULD SEND {address} {value!r}"
-            self.logger.warning(f"[STATE-OSC] {msg}")
-            self.osc_bus_logger.warning(msg)
+            sb_log(self.osc_bus_logger, logging.WARNING, "BRIDGE", "OSC", msg)
+
+            # self.osc_bus_logger.warning(msg)
             return
 
         self.osc_bus_logger.info("SEND %s %r", address, value)
-        self.logger.info(f"[STATE-OSC] SEND {address} {value!r}")
+        sb_log(self.osc_bus_logger, logging.INFO, "BRIDGE", "OSC", "SEND %s %r", address, value)
+
 
         if value is None:
             self.broadcast_osc_client.send_message(address, 0.0)
@@ -2261,13 +2289,17 @@ class Apc40StateMachine:
         if you ever want to re-sync with Resolume.
         """
         if self.composition is None:
-            self.logger.info("[INIT] No composition attached; skipping initial state sync.")
+            sb_log(self.logger,logging.INFO,"ARENA","INIT","No composition attached; skipping initial state sync.")
+            
             return
         if not self.resolume_conn:
-            self.logger.info("[INIT] No Resolume HTTP config; skipping initial state sync.")
+            sb_log(self.logger,logging.INFO,'ARENA','INIT','No Resolume HTTP config; skipping initial state sync.')
+            
             return
+                    
+        sb_log(self.logger,logging.INFO,'ARENA','INIT','Syncing state from Resolume composition...')
 
-        self.logger.info("[INIT] Syncing state from Resolume composition...")
+        
 
         # --- Pass 1: per-layer state from HTTP ---
         for group in self.composition.groups:
@@ -2278,7 +2310,7 @@ class Apc40StateMachine:
                         self.resolume_conn, osc_layer_index
                     )
                 except Exception as e:
-                    print(f"[INIT] Error while fetching active clip for layer {osc_layer_index}: {e}")
+                    sb_log(self.logger,logging.INFO,'ARENA','INIT',f"[INIT] Error while fetching active clip for layer {osc_layer_index}: {e}")
                     active_col = 1
 
                 layer_state = self.layer_states.setdefault(
@@ -2288,11 +2320,9 @@ class Apc40StateMachine:
                 # OFF if column 1, ON otherwise
                 layer_state.playing = bool(active_col and active_col >= 2)
 
-                print(
-                    f"[INIT] Layer {layer.global_index} '{layer.name}' "
-                    f"(group {group.index_in_composition}, osc={osc_layer_index}) "
-                    f"active clip={active_col} -> playing={layer_state.playing}"
-                )
+                msg=f"Layer {layer.global_index} '{layer.name}' "+f"(group {group.index_in_composition}, osc={osc_layer_index}) "+f"active clip={active_col} -> playing={layer_state.playing}"
+                sb_log(self.logger,logging.INFO,'ARENA','INIT',msg)
+                
 
         # --- Pass 2: aggregate into APC group booleans ---
         for apc_index, role_layers in self.group_role_layers.items():
@@ -2311,8 +2341,8 @@ class Apc40StateMachine:
                         break
                 setattr(g_state, prop, any_on)
 
-            self.logger.info(
-                f"[INIT] Group {apc_index} -> "
+            sb_log(self.logger,logging.INFO,'ARENA','INIT',
+                f"Group {apc_index} -> "
                 f"playing={g_state.playing}, "
                 f"effects={g_state.effects}, "
                 f"transforms={g_state.transforms}, "
@@ -2322,7 +2352,7 @@ class Apc40StateMachine:
 
         # Finally, push LED state to the controller
         self._update_all_leds()
-        self.logger.info("[INIT] State sync from Resolume complete.")
+        sb_log(self.logger,logging.INFO,'ARENA','INIT',"State sync from Resolume complete.")
     def _autoplay_fill_layers_for_group(self, group_idx: int) -> None:
         """
         Autopilot for 'fill' layers in a given APC group.
@@ -2334,13 +2364,13 @@ class Apc40StateMachine:
               - Otherwise: skip that layer.
         """
         if self.composition is None:
-            self.logger.info("[AUTOPILOT] (no composition attached) would autoplay fill layers here.")
+            sb_log(self.logger,logging.INFO,'BRIDGE','AUTOPILOT',"(no composition attached) would autoplay fill layers here.")
             return
 
         apc_index = group_idx + 1
         group = self.composition.group_for_apc(apc_index)
         if group is None:
-            self.logger.info(f"[AUTOPILOT] No Resolume group mapped for APC group {apc_index}")
+            sb_log(self.logger,logging.INFO,'BRIDGE','AUTOPILOT',f"No Resolume group mapped for APC group {apc_index}")
             return
 
         # Effective intensity (local * global), clamped 0–1
@@ -2348,7 +2378,7 @@ class Apc40StateMachine:
         effective_intensity = max(0.0, min(1.0, raw_intensity * self.global_intensity_scale))
 
         if effective_intensity <= 0.0:
-            self.logger.info(f"[AUTOPILOT] Group {apc_index} intensity={effective_intensity:.2f} -> skipping fills.")
+            sb_log(self.logger,logging.INFO,'BRIDGE','AUTOPILOT',f"Group {apc_index} intensity={effective_intensity:.2f} -> skipping fills.")
             return
 
         # Which layers are "fill"?
@@ -3745,16 +3775,20 @@ def export_state_machine_dot(sm: Apc40StateMachine, filepath: str = "state_machi
                 f.write(f"  {off_node} -> {off_node} [label=\"double/autopilot\"];\n")
         f.write("}\n")
 
-def start_transport_osc_listener(sm: Apc40StateMachine, host: str = "0.0.0.0", port: int = 7001):
+def start_transport_osc_listener(sm: Apc40StateMachine, host: str = "127.0.0.1", port: int = 7001):
     """
     Start a background OSC server that listens for Resolume transport beat pulses
     like /global/transport/beat4/trigger.
 
     Configure Resolume OSC output to send to this host/port.
-    """
-    dispatcher = Dispatcher()
-    osc_in_logger = logging.getLogger("osc.resolume.in")
 
+    If a server is already running on (host, port) in this process,
+    we reuse that one instead of binding again.
+    """
+    global _transport_osc_servers
+
+    osc_in_logger = logging.getLogger("osc.resolume.in")
+    dispatcher = Dispatcher()
 
     def make_handler(beat_kind: str):
         def handler(address: str, *args):
@@ -3774,13 +3808,35 @@ def start_transport_osc_listener(sm: Apc40StateMachine, host: str = "0.0.0.0", p
     for kind in ("beat1", "beat2", "beat4", "beat8", "beat16"):
         dispatcher.map(f"/global/transport/{kind}/trigger", make_handler(kind))
 
-    server = ThreadingOSCUDPServer((host, port), dispatcher)
+    key = (host, port)
+
+    with _transport_osc_servers_lock:
+        # Reuse an existing server on the same host/port
+        if key in _transport_osc_servers:
+            server = _transport_osc_servers[key]
+            sb_log(osc_in_logger,logging.INFO,"ARENA","OSC-IN",f"Reusing existing transport listener on {host}:{port}")
+            # osc_in_logger.info("Reusing existing transport listener on %s:%s", host, port)
+            return server
+
+        # Otherwise, create and register a new one
+        try:
+            server = ThreadingOSCUDPServer((host, port), dispatcher)
+        except OSError as e:
+            # Port already in use or other bind problem
+            sb_log(osc_in_logger,logging.ERROR,"ARENA","OSC-IN",f"ERROR: could not bind transport listener on {host}:{port}: {e!r}")
+            
+            return None
+
+        _transport_osc_servers[key] = server
+
     print(f"[OSC-IN] Listening for transport beats on {host}:{port}")
+    osc_in_logger.info("Listening for transport beats on %s:%s", host, port)
 
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
 
     return server
+
 def start_show_bridge_state_osc_listener(
     state_machine: "Apc40StateMachine",
     host: str,
@@ -3808,11 +3864,59 @@ def start_show_bridge_state_osc_listener(
                 f"[STATE-INPUT] Error handling inbound show_bridge OSC {address} {args}: {e}"
             )
 
+    def composition_sync_handler(address, *args):
+        """Handle /composition/sync <1> messages by re-fetching the composition."""
+        try:
+            state_machine.osc_bus_in_logger.info("RECV %s %s", address, args)
+        except Exception:
+            pass
+
+        try:
+            # Accept numeric or string '1' as the trigger to resync
+            if args and (args[0] in (1, 1.0, '1', b'1') or str(args[0]) == '1'):
+                state_machine.logger.info("[RESYNC] composition sync requested via OSC; fetching composition...")
+                # Perform resync in a background thread to avoid blocking the OSC server
+                threading.Thread(target=state_machine.resync_with_resolume, daemon=True).start()
+            else:
+                state_machine.logger.debug(f"[RESYNC] /composition/sync received but value != 1: {args}")
+        except Exception as e:
+            state_machine.logger.warning(f"[RESYNC] Error handling /composition/sync OSC: {e}")
+
+    # Specific composition sync handler
+    disp.map("/composition/sync", composition_sync_handler)
+
     # Catch all /state/... messages
     disp.map("/state/*", generic_handler)
     disp.set_default_handler(generic_handler)
 
-    server = ThreadingOSCUDPServer((host, port), disp)
+    key = (host, port)
+    with _osc_servers_lock:
+        if key in _osc_servers:
+            # Reuse existing server instead of binding again
+            state_machine.logger.info(
+                f"[OSC] Reusing existing show_bridge IN listener on {host}:{port}"
+            )
+            # We don't start a new thread here; assume the existing server is already serving
+            return None
+
+        try:
+            server = ThreadingOSCUDPServer((host, port), disp)
+        except OSError as e:
+            # Possible race: another thread may have bound and registered a
+            # server between our initial registry check and this bind attempt.
+            # If so, reuse that server silently. Otherwise, log the bind error.
+            if key in _osc_servers:
+                state_machine.logger.info(
+                    f"[OSC] Listener bind race: reusing existing show_bridge IN listener on {host}:{port}"
+                )
+                return None
+            state_machine.logger.warning(
+                f"[OSC] ERROR: could not bind show_bridge IN listener on {host}:{port}: {e!r}"
+            )
+            return None
+
+        _osc_servers[key] = server
+
     state_machine.logger.info(
         f"[OSC] show_bridge IN listener (name='to show bridge') on {host}:{port}"
     )
@@ -3844,7 +3948,8 @@ def main(argv: Optional[List[str]] = None):
     )
     args = parser.parse_args(argv)
     app_logger = setup_logging()
-    app_logger.info("Starting show_bridge state machine runner")
+    sb_log(app_logger, logging.INFO, "BRIDGE", "INIT", "Starting show_bridge state machine runner")
+
     mappings_dir = Path(args.mappings_dir)
 
     profiles = load_mapping_profiles(mappings_dir)
@@ -3907,7 +4012,7 @@ def main(argv: Optional[List[str]] = None):
         )
 
         comp_model = build_composition_model(comp_json, comp_mapping)
-        app_logger.info(f"[RESOLUME] Loaded composition '{comp_model.name}' with {len(comp_model.groups)} groups.")
+        sb_log(app_logger, logging.INFO, "ARENA","INIT",f"Loaded composition '{comp_model.name}' with {len(comp_model.groups)} groups.")
         debug_dump_composition_columns(comp_model, app_logger)
 
         # OSC client (Resolume control)
@@ -3916,8 +4021,8 @@ def main(argv: Optional[List[str]] = None):
             name=None,
             io_section="outputs",
         )
-        osc_client = SimpleUDPClient(osc_host, osc_port)
-        app_logger.info(f"[OSC] Using Resolume OSC at {osc_host}:{osc_port}")
+        osc_client = get_osc_client(osc_host, osc_port)
+        sb_log(app_logger, logging.INFO, "ARENA","OSC",f"Using Resolume OSC at {osc_host}:{osc_port}")
 
 
         # OSC client (show_bridge telemetry / state broadcast)
@@ -3928,7 +4033,7 @@ def main(argv: Optional[List[str]] = None):
                 name="from show_bridge",   # <--- use the labeled connection
                 io_section="outputs",
             )
-            sb_osc_client = SimpleUDPClient(sb_host, sb_port)
+            sb_osc_client = get_osc_client(sb_host, sb_port)
             app_logger.info(
                 f"[OSC] Using show_bridge OSC OUT (name='from show_bridge') at {sb_host}:{sb_port} "
                 "for state broadcasts"
@@ -3947,7 +4052,7 @@ def main(argv: Optional[List[str]] = None):
                 name=None,
                 io_section="outputs",
             )
-            syn_osc_client = SimpleUDPClient(syn_host, syn_port)
+            syn_osc_client = get_osc_client(syn_host, syn_port)
             app_logger.info(f"[SYN] Using Synesthesia OSC at {syn_host}:{syn_port}")
         except Exception as syn_e:
             app_logger.warning(f"[SYN] WARNING: could not initialize Synesthesia OSC: {syn_e}")
@@ -4014,7 +4119,7 @@ def main(argv: Optional[List[str]] = None):
             )
 
             # Listen for incoming OSC (beats, clip connects) from Resolume
-            start_transport_osc_listener(sm, host="0.0.0.0", port=7001)
+            start_transport_osc_listener(sm, host="127.0.0.1", port=7001)
 
             if comp_model is not None and comp_mapping is not None:
                 sm.attach_composition(comp_model, comp_mapping)
@@ -4022,7 +4127,7 @@ def main(argv: Optional[List[str]] = None):
                 try:
                     sm.broadcast_full_state()
                 except Exception as e:
-                    app_logger.warning(f"[STATE-OUTPUT] Failed to broadcast full state on startup: {e}")
+                    sb_log(app_logger,logging.WARNING,"BRIDGE","STATE-OUTPUT",f"Failed to broadcast full state on startup: {e}")
              # -----------------------------------------------------
             # show_bridge OSC IN (accept mirrored state updates)
             # -----------------------------------------------------
@@ -4034,17 +4139,16 @@ def main(argv: Optional[List[str]] = None):
                 )
                 start_show_bridge_state_osc_listener(sm, sb_in_host, sb_in_port)
             except Exception as e:
-                app_logger.warning(
-                    f"[OSC] No show_bridge OSC listener configured for inbound state (to show bridge): {e}"
+                sb_log(app_logger,logging.WARNING,"BRIDGE","OSC",f"No show_bridge OSC listener configured for inbound state (to show bridge): {e}"
                 )
             # Start the monitoring server for real-time state visualization
             try:
                 monitor_port = 8765
                 monitor = MonitoringServer(sm, host="0.0.0.0", port=monitor_port)
                 monitor.start()
-                app_logger.info(f"[MONITOR] State monitoring HTTP server started on port {monitor_port}.")
+                sb_log(app_logger,logging.INFO,"BRIDGE","MONITOR",f"State monitoring HTTP server started on port {monitor_port}.")
             except Exception as e:
-                app_logger.warning(f"[MONITOR] WARNING: could not start monitoring server: {e}")
+                sb_log(app_logger,logging.WARNING,"BRIDGE","MONITOR",f"[MONITOR] WARNING: could not start monitoring server: {e}")
 
             try:
                 while True:
