@@ -1645,16 +1645,107 @@ class Apc40StateMachine:
 
     def on_external_state_osc(self, address: str, *args) -> None:
         """
-        Handle inbound OSC from 'to show bridge'.
-
-        Right now this function just:
-          - logs that we received a mirrored state message
-          - (optionally) could be extended to actually *drive* local state.
+        Handle inbound OSC from 'to show bridge' (TouchDesigner or other controllers).
+        
+        When user modifies state in TD UI, it sends OSC messages. We parse and apply
+        those updates to the state machine, keeping local and remote UIs in sync.
         """
-        sb_log(self.logger, logging.DEBUG, "BRIDGE", "STATE-INPUT", f"External state OSC {address} {args}")
-        # For now we treat inbound messages as informational / future hooks.
-        # You can later parse /state/group/<g>/<prop> here and mutate self.groups[g-1].
-        return
+        if not args:
+            return
+        
+        value = args[0]
+        self._apply_external_state_update(address, value)
+
+    def _apply_external_state_update(self, address: str, value: Any) -> None:
+        """
+        Apply an external state update (from TouchDesigner or another controller).
+        
+        Parses addresses like:
+          /state/group/{group}/playing/enabled
+          /state/group/{group}/opacity
+          /state/group/{group}/playing/autopilot
+          /state/group/{group}/playing/name
+        """
+        try:
+            # Try to parse /state/group/{group}/{prop_or_role}/{subprop}
+            # Examples:
+            #   /state/group/1/opacity -> group=1, role_or_prop=opacity
+            #   /state/group/1/playing/enabled -> group=1, role=playing, subprop=enabled
+            #   /state/group/1/playing/autopilot -> group=1, role=playing, subprop=autopilot
+            parts = address.split("/")
+            if len(parts) < 5 or parts[1] != "state" or parts[2] != "group":
+                return
+
+            try:
+                group_num = int(parts[3])  # 1-based APC group
+            except (ValueError, IndexError):
+                return
+
+            group_idx = group_num - 1  # Convert to 0-based internal index
+            if not (0 <= group_idx < len(self.groups)):
+                sb_log(self.logger, logging.DEBUG, "BRIDGE", "STATE-INPUT", f"Group index out of range: {group_num}")
+                return
+
+            g = self.groups[group_idx]
+
+            # Handle /state/group/{group}/opacity or /state/group/{group}/intensity
+            if len(parts) == 5:
+                prop_name = parts[4]
+                if prop_name == "opacity":
+                    try:
+                        g.opacity = max(0.0, min(1.0, float(value)))
+                        sb_log(self.logger, logging.INFO, "BRIDGE", "STATE-INPUT", f"Updated group {group_num} opacity -> {g.opacity}")
+                        self._broadcast_state_update(group_idx, "opacity", g.opacity)
+                    except (ValueError, TypeError):
+                        pass
+                elif prop_name == "intensity":
+                    try:
+                        g.intensity = max(0.0, min(1.0, float(value)))
+                        sb_log(self.logger, logging.INFO, "BRIDGE", "STATE-INPUT", f"Updated group {group_num} intensity -> {g.intensity}")
+                        self._broadcast_state_update(group_idx, "intensity", g.intensity)
+                    except (ValueError, TypeError):
+                        pass
+                elif prop_name == "name":
+                    # Group name (read-only feedback, typically ignored on inbound)
+                    pass
+                return
+
+            # Handle /state/group/{group}/{role}/{subprop}
+            if len(parts) >= 6:
+                role_or_prop = parts[4]
+                subprop = parts[5]
+
+                # Boolean properties: /state/group/{group}/{prop}/enabled or /{prop}/autopilot
+                if subprop == "enabled":
+                    # playing/enabled, effects/enabled, etc.
+                    prop_name = role_or_prop
+                    if prop_name in self.BOOL_PROPS:
+                        try:
+                            bool_value = bool(value) if not isinstance(value, (int, float)) else (value != 0.0)
+                            setattr(g, prop_name, bool_value)
+                            sb_log(self.logger, logging.INFO, "BRIDGE", "STATE-INPUT", f"Updated group {group_num} {prop_name} -> {bool_value}")
+                            self._broadcast_state_update(group_idx, prop_name, bool_value)
+                        except Exception as e:
+                            sb_log(self.logger, logging.DEBUG, "BRIDGE", "STATE-INPUT", f"Failed to set {prop_name}: {e}")
+
+                elif subprop == "autopilot":
+                    # playing/autopilot, effects/autopilot, etc.
+                    prop_name = role_or_prop
+                    auto_attr = f"{prop_name}_autopilot"
+                    if prop_name in self.BOOL_PROPS and hasattr(g, auto_attr):
+                        try:
+                            bool_value = bool(value) if not isinstance(value, (int, float)) else (value != 0.0)
+                            setattr(g, auto_attr, bool_value)
+                            sb_log(self.logger, logging.INFO, "BRIDGE", "STATE-INPUT", f"Updated group {group_num} {auto_attr} -> {bool_value}")
+                            self._broadcast_state_update(group_idx, auto_attr, bool_value)
+                        except Exception as e:
+                            sb_log(self.logger, logging.DEBUG, "BRIDGE", "STATE-INPUT", f"Failed to set {auto_attr}: {e}")
+
+                elif subprop == "name":
+                    # e.g., playing/name, effects/name (read-only feedback, typically ignored)
+                    pass
+        except Exception as e:
+            sb_log(self.logger, logging.DEBUG, "BRIDGE", "STATE-INPUT", f"Error parsing external state update {address}: {e}")
 
     def on_clip_connect(self, address: str, *args):
         """
@@ -3920,6 +4011,7 @@ def start_show_bridge_state_osc_listener(
     state_machine.logger.info(
         f"[OSC] show_bridge IN listener (name='to show bridge') on {host}:{port}"
     )
+    print(f"[OSC-IN] Listening for state updates on {host}:{port}")
 
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
