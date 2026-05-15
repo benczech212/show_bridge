@@ -5,14 +5,14 @@ outputs:
       playing:         "/state/group/{group}/playing/enabled"
       effects:         "/state/group/{group}/effects/enabled"
       transforms:      "/state/group/{group}/transforms/enabled"
-      dynamic_masks:   "/state/group/{group}/dynamic_masks/enabled"
+      masks:   "/state/group/{group}/masks/enabled"
       color:           "/state/group/{group}/color/enabled"
 
       # NEW: per-role autopilot flags
       playing_autopilot:       "/state/group/{group}/playing/autopilot"
       effects_autopilot:       "/state/group/{group}/effects/autopilot"
       transforms_autopilot:    "/state/group/{group}/transforms/autopilot"
-      dynamic_masks_autopilot: "/state/group/{group}/dynamic_masks/autopilot"
+      masks_autopilot: "/state/group/{group}/masks/autopilot"
       color_autopilot:         "/state/group/{group}/color/autopilot"
 
     float:
@@ -24,5 +24,5 @@ outputs:
       playing_name:       "/state/group/{group}/playing/name"
       effects_name:       "/state/group/{group}/effects/name"
       transforms_name:    "/state/group/{group}/transforms/name"
-      dynamic_masks_name: "/state/group/{group}/dynamic_masks/name"
+      masks_name: "/state/group/{group}/masks/name"
       color_name:         "/state/group/{group}/color/name"

@@ -8,38 +8,38 @@
     "transforms_autopilot": true,
     "color": false,
     "color_autopilot": true,
-    "opacity": 0.0,
-    "intensity": 0.0,
-    "dynamic_masks": false,
-    "dynamic_masks_autopilot": true
+    "opacity": 1.0,
+    "intensity": 1.0,
+    "masks": false,
+    "masks_autopilot": true
   },
   "group_2": {
     "playing": false,
-    "playing_autopilot": false,
+    "playing_autopilot": true,
     "effects": false,
     "effects_autopilot": true,
     "transforms": false,
     "transforms_autopilot": true,
     "color": false,
     "color_autopilot": true,
-    "opacity": 0.0,
-    "intensity": 0.0,
-    "dynamic_masks": false,
-    "dynamic_masks_autopilot": true
+    "opacity": 1.0,
+    "intensity": 1.0,
+    "masks": false,
+    "masks_autopilot": true
   },
   "group_3": {
-    "playing": false,
-    "playing_autopilot": false,
+    "playing": true,
+    "playing_autopilot": true,
     "effects": true,
     "effects_autopilot": true,
     "transforms": true,
     "transforms_autopilot": true,
     "color": false,
     "color_autopilot": true,
-    "opacity": 0.0,
-    "intensity": 0.0,
-    "dynamic_masks": true,
-    "dynamic_masks_autopilot": true
+    "opacity": 0.4330708661417323,
+    "intensity": 1.0,
+    "masks": true,
+    "masks_autopilot": true
   },
   "group_4": {
     "playing": false,
@@ -51,9 +51,9 @@
     "color": false,
     "color_autopilot": true,
     "opacity": 0.0,
-    "intensity": 0.0,
-    "dynamic_masks": true,
-    "dynamic_masks_autopilot": true
+    "intensity": 1.0,
+    "masks": false,
+    "masks_autopilot": true
   },
   "group_5": {
     "playing": false,
@@ -65,9 +65,9 @@
     "color": false,
     "color_autopilot": true,
     "opacity": 0.0,
-    "intensity": 0.0,
-    "dynamic_masks": true,
-    "dynamic_masks_autopilot": true
+    "intensity": 1.0,
+    "masks": false,
+    "masks_autopilot": true
   },
   "group_6": {
     "playing": false,
@@ -79,9 +79,9 @@
     "color": false,
     "color_autopilot": true,
     "opacity": 0.0,
-    "intensity": 0.0,
-    "dynamic_masks": false,
-    "dynamic_masks_autopilot": true
+    "intensity": 1.0,
+    "masks": false,
+    "masks_autopilot": true
   },
   "group_7": {
     "playing": false,
@@ -93,9 +93,9 @@
     "color": false,
     "color_autopilot": true,
     "opacity": 0.0,
-    "intensity": 0.0,
-    "dynamic_masks": false,
-    "dynamic_masks_autopilot": true
+    "intensity": 1.0,
+    "masks": false,
+    "masks_autopilot": true
   },
   "group_8": {
     "playing": false,
@@ -107,9 +107,9 @@
     "color": false,
     "color_autopilot": true,
     "opacity": 0.0,
-    "intensity": 0.0,
-    "dynamic_masks": false,
-    "dynamic_masks_autopilot": true
+    "intensity": 1.0,
+    "masks": false,
+    "masks_autopilot": true
   },
   "global": {
     "global_autopilot": true,

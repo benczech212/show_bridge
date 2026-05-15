@@ -20,6 +20,6 @@ layer_roles:
   transforms: ["Transform", "Transforms"]
   effects: ["Effects"]
   fills: ["Fill", "Fills", "Background"]
-  dynamic_masks: ["FFT Masks", "Dynamic Masks", "FFT Mask"]
+  masks: ["FFT Masks", "Dynamic Masks", "FFT Mask"]
   static_masks: ["Static Masks", "Masks"]
   routing: ["Router", "Routing"]

@@ -1,11 +1,28 @@
 from __future__ import annotations
 
 import logging
+import os
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Dict, Any
 
 import yaml
+
+
+class _WinSafeRotatingFileHandler(RotatingFileHandler):
+    """RotatingFileHandler that silently skips rotation on Windows file-lock errors.
+
+    On Windows, os.rename() raises PermissionError when any other handle has
+    the destination file open (e.g. an IDE or a lingering previous process).
+    Skipping the rename means the current log file simply keeps growing until
+    the next rotation attempt succeeds — acceptable for dev use.
+    """
+
+    def rotate(self, source: str, dest: str) -> None:
+        try:
+            super().rotate(source, dest)
+        except PermissionError:
+            pass
 
 LOG_DIR = Path("logs")
 OSC_LOG_DIR = LOG_DIR / "osc"
@@ -169,7 +186,7 @@ def setup_logging(level: int = logging.INFO, formatting_cfg_path: str | Path | N
     logger.addHandler(ch)
 
     master_path = LOG_DIR / "show_bridge.log"
-    fh = RotatingFileHandler(master_path, maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8")
+    fh = _WinSafeRotatingFileHandler(master_path, maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8")
     fh.setLevel(level)
     fh.setFormatter(file_fmt)
     logger.addHandler(fh)
@@ -185,7 +202,7 @@ def setup_logging(level: int = logging.INFO, formatting_cfg_path: str | Path | N
     for name, path in osc_loggers.items():
         l = logging.getLogger(name)
         l.setLevel(level)
-        fh2 = RotatingFileHandler(path, maxBytes=2 * 1024 * 1024, backupCount=5, encoding="utf-8")
+        fh2 = _WinSafeRotatingFileHandler(path, maxBytes=2 * 1024 * 1024, backupCount=5, encoding="utf-8")
         fh2.setLevel(level)
         fh2.setFormatter(file_fmt)
         l.addHandler(fh2)

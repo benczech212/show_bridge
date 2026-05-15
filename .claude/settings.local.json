@@ -1,0 +1,28 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(Get-ChildItem -Path \"d:\\\\dev\\\\show_bridge\" -Recurse -Force)",
+      "Bash(Select-Object FullName, PSIsContainer)",
+      "Bash(Format-Table -AutoSize)",
+      "PowerShell(head -100)",
+      "PowerShell(Get-ChildItem -Path \"D:\\\\dev\\\\New folder\\\\apc_40_mk2_testing\" -Recurse | Where-Object {-not $_.PSIsContainer} | Select-Object FullName)",
+      "WebFetch(domain:192.168.56.1)",
+      "Bash(curl -s \"http://192.168.56.1:8080/api/v1/composition\" --max-time 5)",
+      "Bash(python -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(json.dumps\\(list\\(d.keys\\(\\)\\), indent=2\\)\\)\")",
+      "Bash(python -c ' *)",
+      "Bash(curl -s \"http://192.168.56.1:8080/api/docs/rest/\" --max-time 5)",
+      "Bash(curl -s \"http://192.168.56.1:8080/api/docs/rest/swagger-initializer.js\" --max-time 5)",
+      "Bash(cd /d d:\\\\dev\\\\show_bridge)",
+      "Bash(python -c \"import mido; print\\('IN:', mido.get_input_names\\(\\)\\); print\\('OUT:', mido.get_output_names\\(\\)\\)\")",
+      "Bash(python -c \"import run_v3; sm = dir\\(run_v3.Apc40StateMachine\\); print\\([m for m in sm if not m.startswith\\('__'\\)]\\)\")",
+      "Bash(cd /d \"d:\\\\dev\\\\show_bridge\")",
+      "Bash(python -c \"import rich; print\\(rich.__version__\\)\")",
+      "Bash(python -c \"from rich.table import Table; from rich.live import Live; print\\('rich ok'\\)\")",
+      "Bash(python -c \"import flask; print\\('flask', flask.__version__\\)\")",
+      "Bash(Get-Content \"d:\\\\dev\\\\show_bridge\\\\composition_mappings\\\\lake_vista_backyard.yaml\")",
+      "Bash(Get-Content \"d:\\\\dev\\\\show_bridge\\\\logs\\\\show_bridge.log\" -Tail 50)",
+      "Bash(python check_composition.py)",
+      "Bash(python -c \"import run_v4; print\\('OK'\\)\")"
+    ]
+  }
+}

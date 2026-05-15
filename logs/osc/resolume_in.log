@@ -9962,3 +9962,56 @@
 2025-12-10 00:46:43 [INFO] [BRIDGE] [LOG] osc.resolume.in - RECV beat8 /global/transport/beat8/trigger v=1.0
 2025-12-10 00:46:43 [INFO] [BRIDGE] [LOG] osc.resolume.in - RECV beat16 /global/transport/beat16/trigger v=1.0
 2025-12-10 01:09:56 [ERROR] [ARENA] [OSC-IN] osc.resolume.in - ERROR: could not bind transport listener on 127.0.0.1:7001: OSError(10048, 'Only one usage of each socket address (protocol/network address/port) is normally permitted', None, 10048, None)
+2025-12-15 16:01:45 [ERROR] [ARENA] [OSC-IN] osc.resolume.in - ERROR: could not bind transport listener on 127.0.0.1:7001: OSError(10048, 'Only one usage of each socket address (protocol/network address/port) is normally permitted', None, 10048, None)
+2025-12-15 16:10:55 [ERROR] [ARENA] [OSC-IN] osc.resolume.in - ERROR: could not bind transport listener on 127.0.0.1:7001: OSError(10048, 'Only one usage of each socket address (protocol/network address/port) is normally permitted', None, 10048, None)
+2025-12-15 16:12:11 [ERROR] [ARENA] [OSC-IN] osc.resolume.in - ERROR: could not bind transport listener on 127.0.0.1:7001: OSError(10048, 'Only one usage of each socket address (protocol/network address/port) is normally permitted', None, 10048, None)
+2025-12-15 16:12:22 [ERROR] [ARENA] [OSC-IN] osc.resolume.in - ERROR: could not bind transport listener on 127.0.0.1:7001: OSError(10048, 'Only one usage of each socket address (protocol/network address/port) is normally permitted', None, 10048, None)
+2025-12-15 16:17:32 [ERROR] [ARENA] [OSC-IN] osc.resolume.in - ERROR: could not bind transport listener on 127.0.0.1:7001: OSError(10048, 'Only one usage of each socket address (protocol/network address/port) is normally permitted', None, 10048, None)
+2025-12-15 16:19:46 [ERROR] [ARENA] [OSC-IN] osc.resolume.in - ERROR: could not bind transport listener on 127.0.0.1:7001: OSError(10048, 'Only one usage of each socket address (protocol/network address/port) is normally permitted', None, 10048, None)
+2025-12-15 16:21:21 [ERROR] [ARENA] [OSC-IN] osc.resolume.in - ERROR: could not bind transport listener on 127.0.0.1:7001: OSError(10048, 'Only one usage of each socket address (protocol/network address/port) is normally permitted', None, 10048, None)
+2025-12-15 16:22:49 [ERROR] [ARENA] [OSC-IN] osc.resolume.in - ERROR: could not bind transport listener on 127.0.0.1:7001: OSError(10048, 'Only one usage of each socket address (protocol/network address/port) is normally permitted', None, 10048, None)
+2026-05-13 23:32:45 [INFO] [BRIDGE] [LOG] osc.resolume.in - Listening for transport beats on 127.0.0.1:7001
+2026-05-13 23:33:27 [INFO] [BRIDGE] [LOG] osc.resolume.in - Listening for transport beats on 127.0.0.1:7001
+2026-05-13 23:38:02 [INFO] [BRIDGE] [LOG] osc.resolume.in - Listening for transport beats on 127.0.0.1:7001
+2026-05-13 23:45:14 [INFO] [BRIDGE] [LOG] osc.resolume.in - Listening for transport beats on 127.0.0.1:7001
+2026-05-13 23:46:19 [INFO] [BRIDGE] [LOG] osc.resolume.in - Listening for transport beats on 127.0.0.1:7001
+2026-05-13 23:49:17 [INFO] [BRIDGE] [LOG] osc.resolume.in - Listening for transport beats on 127.0.0.1:7001
+2026-05-14 00:09:40 [INFO] [BRIDGE] [LOG] osc.resolume.in - Listening for transport beats on 127.0.0.1:7001
+2026-05-14 00:22:57 [INFO] [BRIDGE] [LOG] osc.resolume.in - Listening for transport beats on 127.0.0.1:7001
+2026-05-14 00:29:06 [INFO] [BRIDGE] [LOG] osc.resolume.in - Listening for transport beats on 127.0.0.1:7001
+2026-05-14 00:33:05 [INFO] [BRIDGE] [LOG] osc.resolume.in - Listening for transport beats on 127.0.0.1:7001
+2026-05-14 00:38:56 [INFO] [BRIDGE] [LOG] osc.resolume.in - Listening for transport beats on 127.0.0.1:7001
+2026-05-14 00:45:34 [INFO] [BRIDGE] [LOG] osc.resolume.in - Listening for transport beats on 127.0.0.1:7001
+2026-05-14 00:53:28 [INFO] [BRIDGE] [LOG] osc.resolume.in - Listening for transport beats on 127.0.0.1:7001
+2026-05-14 00:59:24 [INFO] [BRIDGE] [LOG] osc.resolume.in - Listening for transport beats on 127.0.0.1:7001
+2026-05-14 01:01:21 [INFO] [BRIDGE] [LOG] osc.resolume.in - Listening for transport beats on 127.0.0.1:7001
+2026-05-14 01:08:10 [INFO] [BRIDGE] [LOG] osc.resolume.in - Listening for transport beats on 127.0.0.1:7001
+2026-05-14 01:10:50 [INFO] [BRIDGE] [LOG] osc.resolume.in - Listening for transport beats on 127.0.0.1:7001
+2026-05-14 01:12:17 [INFO] [BRIDGE] [LOG] osc.resolume.in - Listening for transport beats on 127.0.0.1:7001
+2026-05-14 15:34:51 [INFO] [BRIDGE] [LOG] osc.resolume.in - Listening for transport beats on 127.0.0.1:7001
+2026-05-14 18:07:01 [INFO] [BRIDGE] [LOG] osc.resolume.in - Listening for transport beats on 127.0.0.1:7001
+2026-05-14 18:12:02 [INFO] [BRIDGE] [LOG] osc.resolume.in - Listening for transport beats on 127.0.0.1:7001
+2026-05-14 18:14:16 [INFO] [BRIDGE] [LOG] osc.resolume.in - Listening for transport beats on 127.0.0.1:7001
+2026-05-14 18:14:39 [INFO] [BRIDGE] [LOG] osc.resolume.in - Listening for transport beats on 127.0.0.1:7001
+2026-05-14 18:18:40 [INFO] [BRIDGE] [LOG] osc.resolume.in - Listening for transport beats on 127.0.0.1:7001
+2026-05-14 18:19:55 [INFO] [BRIDGE] [LOG] osc.resolume.in - Listening for transport beats on 127.0.0.1:7001
+2026-05-14 18:21:42 [INFO] [BRIDGE] [LOG] osc.resolume.in - Listening for transport beats on 127.0.0.1:7001
+2026-05-14 18:24:58 [INFO] [BRIDGE] [LOG] osc.resolume.in - Listening for transport beats on 127.0.0.1:7001
+2026-05-14 18:25:34 [INFO] [BRIDGE] [LOG] osc.resolume.in - Listening for transport beats on 127.0.0.1:7001
+2026-05-14 18:28:43 [INFO] [BRIDGE] [LOG] osc.resolume.in - Listening for transport beats on 127.0.0.1:7001
+2026-05-14 18:37:54 [INFO] [BRIDGE] [LOG] osc.resolume.in - Listening for transport beats on 127.0.0.1:7001
+2026-05-14 18:38:29 [INFO] [BRIDGE] [LOG] osc.resolume.in - Listening for transport beats on 127.0.0.1:7001
+2026-05-14 18:38:59 [INFO] [BRIDGE] [LOG] osc.resolume.in - Listening for transport beats on 127.0.0.1:7001
+2026-05-14 18:41:53 [INFO] [BRIDGE] [LOG] osc.resolume.in - Listening for transport beats on 127.0.0.1:7001
+2026-05-14 18:42:39 [INFO] [BRIDGE] [LOG] osc.resolume.in - Listening for transport beats on 127.0.0.1:7001
+2026-05-14 18:46:55 [INFO] [BRIDGE] [LOG] osc.resolume.in - Listening for transport beats on 127.0.0.1:7001
+2026-05-14 18:49:50 [INFO] [BRIDGE] [LOG] osc.resolume.in - Listening for transport beats on 127.0.0.1:7001
+2026-05-14 18:56:58 [INFO] [BRIDGE] [LOG] osc.resolume.in - Listening for transport beats on 127.0.0.1:7001
+2026-05-14 19:01:52 [INFO] [BRIDGE] [LOG] osc.resolume.in - Listening for transport beats on 127.0.0.1:7001
+2026-05-14 19:04:46 [INFO] [BRIDGE] [LOG] osc.resolume.in - Listening for transport beats on 127.0.0.1:7001
+2026-05-14 19:07:13 [INFO] [BRIDGE] [LOG] osc.resolume.in - Listening for transport beats on 127.0.0.1:7001
+2026-05-14 19:07:52 [INFO] [BRIDGE] [LOG] osc.resolume.in - Listening for transport beats on 127.0.0.1:7001
+2026-05-14 19:12:39 [INFO] [BRIDGE] [LOG] osc.resolume.in - Listening for transport beats on 127.0.0.1:7001
+2026-05-14 19:15:25 [INFO] [BRIDGE] [LOG] osc.resolume.in - Listening for transport beats on 127.0.0.1:7001
+2026-05-14 19:17:11 [INFO] [BRIDGE] [LOG] osc.resolume.in - Listening for transport beats on 127.0.0.1:7001
+2026-05-14 19:20:31 [INFO] [BRIDGE] [LOG] osc.resolume.in - Listening for transport beats on 127.0.0.1:7001

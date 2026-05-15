@@ -1,0 +1,88 @@
+# state_action_mappings.yaml
+version: 1
+description: >
+  State-aware gesture mappings: per-group role buttons behave differently
+  based on StateMachine enabled flag.
+controller_name: "Akai APC40"
+# Gesture keys used by MidiIn:
+#   tap, double, long
+
+# ---------------------------------------------------------
+# Action primitives (implemented in dispatcher extension)
+# ---------------------------------------------------------
+actions:
+  # Read current state for role enabled/autopilot
+  get_enabled:        { kind: builtin }
+  get_autopilot:      { kind: builtin }
+
+  # Mutations on StateMachine
+  set_enabled:        { kind: builtin }
+  toggle_autopilot:   { kind: builtin }
+
+  # External trigger actions (ShowBridge control layer)
+  next_clip:          { kind: builtin }
+
+# ---------------------------------------------------------
+# A reusable "role_button" behavior:
+# - tap is conditional on enabled
+# - long always enables (if disabled) or disables (if enabled)
+# - double toggles autopilot always
+# ---------------------------------------------------------
+role_button_template: &role_button_template
+  tap:
+    when:
+      - if: { state: enabled, equals: true }
+        do: { action: next_clip }
+      - if: { state: enabled, equals: false }
+        do: { action: set_enabled, args: { value: true } }
+
+  long:
+    when:
+      - if: { state: enabled, equals: true }
+        do: { action: set_enabled, args: { value: false } }
+      - if: { state: enabled, equals: false }
+        do: { action: set_enabled, args: { value: true } }
+
+  double:
+    do: { action: toggle_autopilot }
+
+# ---------------------------------------------------------
+# Group button mapping template: maps control names -> role
+# and assigns the role_button_template behavior.
+#
+# IMPORTANT: keys here are "control suffixes" which get expanded
+# to g{N}_<suffix> by the dispatcher.
+# ---------------------------------------------------------
+group_template: &group_template
+  arm:
+    role: colors
+    behavior: *role_button_template
+
+  solo:
+    role: effects
+    behavior: *role_button_template
+
+  activator:
+    role: transforms
+    behavior: *role_button_template
+
+  track_select:
+    role: masks
+    behavior: *role_button_template
+
+  clip_stop:
+    role: playing
+    behavior: *role_button_template
+
+# ---------------------------------------------------------
+# Groups: instantiate for 1-8
+# ---------------------------------------------------------
+groups:
+  1: { <<: *group_template }
+  2: { <<: *group_template }
+  3: { <<: *group_template }
+  4: { <<: *group_template }
+  5: { <<: *group_template }
+  6: { <<: *group_template }
+  7: { <<: *group_template }
+  8: { <<: *group_template }

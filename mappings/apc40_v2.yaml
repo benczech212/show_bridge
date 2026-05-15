@@ -1,0 +1,291 @@
+controller_name: "Akai APC40"
+description: >
+  Full APC40 layout + state bindings for 8 output groups.
+  Channels in the sheet are 1–8 but MIDI uses 0–7.
+  This file reflects that (channel = sheet_channel - 1).
+author: "Benjamin Czech"
+version: 2.0
+
+# =========================================================
+# Input mappings: raw MIDI layout (notes/CCs per control)
+# =========================================================
+input_mappings:
+  # --------------------------
+  # Group/Track Template
+  # --------------------------
+  group_template: &group_template
+    clip_buttons:
+      - { name: clip_row_5, note: 53 }
+      - { name: clip_row_4, note: 54 }
+      - { name: clip_row_3, note: 55 }
+      - { name: clip_row_2, note: 56 }
+      - { name: clip_row_1, note: 57 }
+    clip_stop:
+      note: 52
+    track_select:
+      note: 51
+    activator:
+      note: 50
+    solo:
+      note: 49
+    arm:
+      note: 48
+    slider:
+      cc: 7
+
+  # --------------------------
+  # Groups 1–8
+  # --------------------------
+  groups:
+    1:
+      <<: *group_template
+      channel: 0
+    2:
+      <<: *group_template
+      channel: 1
+    3:
+      <<: *group_template
+      channel: 2
+    4:
+      <<: *group_template
+      channel: 3
+    5:
+      <<: *group_template
+      channel: 4
+    6:
+      <<: *group_template
+      channel: 5
+    7:
+      <<: *group_template
+      channel: 6
+    8:
+      <<: *group_template
+      channel: 7
+
+  # --------------------------
+  # Master / Global Controls
+  # --------------------------
+  global:
+    stop_all_clips:
+      note: 81
+      channel: 0   # spreadsheet: 81 / 1
+    master_track_select:
+      note: 80
+      channel: 0
+    vertical_scroll:
+      cc: 47
+      channel: 0
+    master_output_slider:
+      cc: 14
+      channel: 1
+
+    # Right-side vertical buttons: 82–86 / 1
+    scene_launch:
+      - { name: scene_launch_1, note: 82, channel: 0 }
+      - { name: scene_launch_2, note: 83, channel: 0 }
+      - { name: scene_launch_3, note: 84, channel: 0 }
+      - { name: scene_launch_4, note: 85, channel: 0 }
+      - { name: scene_launch_5, note: 86, channel: 0 }
+
+    # Navigation block: Right, Left, Up, Down
+    navigation:
+      right: { note: 96, channel: 0 }
+      left:  { note: 97, channel: 0 }
+      up:    { note: 94, channel: 0 }
+      down:  { note: 95, channel: 0 }
+
+    # Shift / Nudge / Tap Tempo
+    timing_controls:
+      shift_resync: { note: 98, channel: 0 }
+      nudge_minus:  { note: 101, channel: 0 }
+      nudge_plus:   { note: 100, channel: 0 }
+      tap_tempo:    { note: 99, channel: 0 }
+
+    # Global buttons rows (58–61 and 62–65)
+    global_buttons_row1:
+      - { name: global_1, note: 58, channel: 0 }
+      - { name: global_2, note: 59, channel: 0 }
+      - { name: global_3, note: 60, channel: 0 }
+      - { name: global_4, note: 61, channel: 0 }
+
+    global_buttons_row2:
+      - { name: global_5, note: 62, channel: 0 }
+      - { name: global_6, note: 63, channel: 0 }
+      - { name: global_7, note: 64, channel: 0 }
+      - { name: global_8, note: 65, channel: 0 }
+
+    # Transport (Play / Stop / Rec)
+    transport:
+      play: { note: 91, channel: 0 }
+      stop: { note: 92, channel: 0 }
+      rec:  { note: 93, channel: 0 }
+
+    # Master slider at right of all groups
+    master_output_slider:
+      cc: 14
+      channel: 1
+
+    horizontal_slider:
+      cc: 15
+      channel: 0
+    vertical_slider:
+      cc: 47
+      channel: 1
+
+  # -----------------------------------
+  # Velocity mappings (per note / range)
+  # -----------------------------------
+  velocity_mappings:
+    maps:
+      # 1) Simple toggle (explicit)
+      toggle_green:
+        off: 0
+        on: 1
+
+      # 2) Simple toggle (shorthand)
+      toggle_red: 3          # off=0, on=3
+      toggle_orange: 5      # off=0, on=5
+      # 3) Multi-color
+      multi_example:
+        off: 0
+        colors: [1, 3, 5]    # we pick first non-off as "on" for booleans
+      
+
+    ranges:
+      
+      - { start: 48, end: 53, map: toggle_green }
+      # Intensity / Clip Launch buttons 53–56 = red
+      - { start: 53, end: 56, map: toggle_red }
+      # Scene buttons 82–86 = green
+      - { start: 82, end: 86, map: toggle_green }
+
+    notes:
+      "57": toggle_orange  # FFT Mask
+      "81": toggle_green    # stop_all_clips
+      "91": toggle_green    # play
+      "92": toggle_green    # stop
+
+
+
+
+# =========================================================
+# State mappings: how input controls map into state machine
+# =========================================================
+state_mappings:
+
+  # --------------------------
+  # Reusable templates
+  # --------------------------
+  templates:
+
+    # Template for a "role button" behavior:
+    # - if enabled TRUE:
+    #     tap    -> next clip
+    #     long   -> set enabled FALSE
+    #     double -> toggle autopilot
+    # - if enabled FALSE:
+    #     tap    -> set enabled TRUE
+    #     long   -> set enabled TRUE
+    #     double -> toggle autopilot
+    role_button: &role_button
+      tap:
+        when:
+          enabled: true
+        do:
+          - { action: next_clip }
+      tap_else:
+        do:
+          - { action: set_enabled, args: { enabled: true } }
+
+      long:
+        when:
+          enabled: true
+        do:
+          - { action: set_enabled, args: { enabled: false } }
+      long_else:
+        do:
+          - { action: set_enabled, args: { enabled: true } }
+
+      double:
+        do:
+          - { action: toggle_autopilot }
+
+  # --------------------------
+  # Group mappings (1–8)
+  # --------------------------
+  groups:
+    # These are resolved dynamically by group number.
+    # "control" should match the renamed channel names from your MidiIn renamer.
+
+    # g#_arm -> colors role
+    - group: "*"
+      role: colors
+      control: "g{group}_arm"
+      gestures:
+        <<: *role_button
+
+    # g#_solo -> effects role
+    - group: "*"
+      role: effects
+      control: "g{group}_solo"
+      gestures:
+        <<: *role_button
+
+    # g#_activator -> transforms role
+    - group: "*"
+      role: transforms
+      control: "g{group}_activator"
+      gestures:
+        <<: *role_button
+
+    # g#_track_select -> masks role
+    - group: "*"
+      role: masks
+      control: "g{group}_track_select"
+      gestures:
+        <<: *role_button
+
+    # g#_clip_stop -> playing role
+    - group: "*"
+      role: playing
+      control: "g{group}_clip_stop"
+      gestures:
+        <<: *role_button
+
+  # --------------------------
+  # Continuous controls (CC) -> state values
+  # --------------------------
+  continuous:
+    # Track slider (from group_template.slider cc:7) -> opacity 0..1
+    - group: "*"
+      control: "g{group}_slider"
+      action: set_group_opacity_from_cc
+      args:
+        # optional shaping
+        normalize: true
+        in_min: 0
+        in_max: 127
+        clamp_min: 0.0
+        clamp_max: 1.0
+
+    # Optional: per-group intensity fader (if you added group_intensity_slider mapping)
+    - group: "*"
+      control: "g{group}_group_intensity_slider"
+      action: set_group_intensity_from_cc
+      args:
+        normalize: true
+        in_min: 0
+        in_max: 127
+        clamp_min: 0.0
+        clamp_max: 1.0
+
+  # --------------------------
+  # (Optional) global mappings
+  # --------------------------
+  global:    []
+    # You can add global gestures later, same pattern:
+    # - control: "global_stop_all_clips"
+    #   gestures:
+    #     tap:    { do: [ { action: ... } ] }
+    #     long:   { do: [ { action: ... } ] }
+    #     double: { do: [ { action: ... } ] }

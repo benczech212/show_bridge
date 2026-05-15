@@ -166,7 +166,8 @@ Import `setup_logging` and `sb_log` from that module instead of using local defi
 class ClipInfo:
     id: str
     name: str
-    column_index: int  # 1-based column index in the Resolume grid
+    column_index: int   # 1-based column index in the Resolume grid
+    connected: bool = False  # True when Resolume reports Connected / Connected & previewing
 
 
 @dataclass
@@ -392,9 +393,9 @@ def build_composition_model(
 
     lg_list = _iter_layergroups(comp_json)
 
-    # Resolume group name -> APC index
+    # Resolume group name -> APC index (strip+lowercase both sides for robustness)
     resolume_group_to_apc: Dict[str, int] = {
-        v.lower(): k for k, v in mapping.apc_groups.items()
+        v.strip().lower(): k for k, v in mapping.apc_groups.items()
     }
     next_layer_index = 0  # fallback global layer index across all groups
 
@@ -403,7 +404,7 @@ def build_composition_model(
         g_name = _name_from_field(g_json.get("name"), f"group-{g_id}")
 
         apc_idx: Optional[int] = None
-        key = g_name.lower()
+        key = g_name.strip().lower()
         if key in resolume_group_to_apc:
             apc_idx = resolume_group_to_apc[key]
 
@@ -450,11 +451,16 @@ def build_composition_model(
                     continue
 
                 col_idx = _clip_column_index(clip_json, col0)
+                conn_raw = clip_json.get("connected")
+                c_connected = (
+                    isinstance(conn_raw, dict) and conn_raw.get("index", 0) >= 3
+                )  # index 3=Connected, 4=Connected & previewing
                 layer_info.clips.append(
                     ClipInfo(
                         id=c_id,
                         name=c_name,
                         column_index=col_idx,
+                        connected=c_connected,
                     )
                 )
 
@@ -511,8 +517,13 @@ def fetch_active_clip_column_for_layer(conn: Dict[str, Any], layer_index: int) -
         clip_name = clip_json.get("name") or clip_json.get("Name") or clip_json.get("id") or f"#{idx+1}"
 
         # Various possible places "connected/playing" could hide
-        connected_flag = clip_json.get("connected").get('value')
-        clip_index = clip_json.get("connected").get('index')
+        connected_raw = clip_json.get("connected")
+        if isinstance(connected_raw, dict):
+            connected_flag = connected_raw.get('value')
+            clip_index = connected_raw.get('index')
+        else:
+            connected_flag = None
+            clip_index = None
         state_field = clip_json.get("state") or clip_json.get("connectionState")
         transport = clip_json.get("transport") or {}
         transport_state = transport.get("state")
@@ -818,8 +829,8 @@ class OutputGroupState:
     transforms_autopilot: bool = True
 
     # Dynamic mask layers (formerly fft_masks)
-    dynamic_masks: bool = False
-    dynamic_masks_autopilot: bool = True
+    masks: bool = False
+    masks_autopilot: bool = True
 
     color: bool = False
     color_autopilot: bool = True
@@ -1450,12 +1461,10 @@ def auto_select_port(port_names, controller_name: str, kind: str) -> str:
         print(f"Choosing first match: {matches[0]}")
         return matches[0]
     else:
-        print(f"No {kind} port matched controller_name='{controller_name}'.")
-        print(f"Available MIDI {kind} ports:")
-        for i, n in enumerate(port_names):
-            print(f"  [{i}] {n}")
-        idx = int(input(f"Select {kind} port number: "))
-        return port_names[idx]
+        raise RuntimeError(
+            f"No MIDI {kind} port matched '{controller_name}'. "
+            f"Available: {port_names}"
+        )
 
 
 # ---------------------------------------------------------
@@ -1471,9 +1480,9 @@ class Apc40StateMachine:
     """
 
     # Boolean properties that can be toggled via the controller.  These correspond
-    # to high-level layer roles in the composition mapping.  Added 'dynamic_masks'
+    # to high-level layer roles in the composition mapping.  Added 'masks'
     # to support per-group dynamic mask toggling.
-    BOOL_PROPS = ("playing", "effects", "transforms", "dynamic_masks", "color")
+    BOOL_PROPS = ("playing", "effects", "transforms", "masks", "color")
 
 
     # Map state-machine boolean properties to layer roles in the
@@ -1483,8 +1492,8 @@ class Apc40StateMachine:
         "playing": "fills",
         "effects": "effects",
         "transforms": "transforms",
-        # Dynamic mask layers (formerly fft_masks) use the 'dynamic_masks' role
-        "dynamic_masks": "dynamic_masks",
+        # Dynamic mask layers (formerly fft_masks) use the 'masks' role
+        "masks": "masks",
         # Color button targets layers tagged with the 'colors' role
         "color": "colors",
     }
@@ -1826,7 +1835,7 @@ class Apc40StateMachine:
     def _refresh_group_booleans_from_layer_states(self) -> None:
         """
         Recompute each APC group's boolean properties (playing, effects, transforms,
-        dynamic_masks, color) based on the current per-layer 'playing' state and the
+        masks, color) based on the current per-layer 'playing' state and the
         composition mapping in group_role_layers.
         """
         if self.composition is None:
@@ -1860,7 +1869,7 @@ class Apc40StateMachine:
             sb_log(self.logger, logging.INFO, "BRIDGE", "STATE-OSC", "No state output config; skipping full-state broadcast.")
             return
 
-        # 1) Per-group properties (playing/effects/transforms/dynamic_masks/color, opacity, intensity)
+        # 1) Per-group properties (playing/effects/transforms/masks/color, opacity, intensity)
         for group_idx, g in enumerate(self.groups):
             # Boolean props and their autopilots
             for prop in self.BOOL_PROPS:
@@ -2158,7 +2167,7 @@ class Apc40StateMachine:
             self.logger.info(
                 f"[INIT] Group {apc_group_index} -> "
                 f"playing={g.playing}, effects={g.effects}, transforms={g.transforms}, "
-                f"dynamic_masks={g.dynamic_masks}, color={g.color}"
+                f"masks={g.masks}, color={g.color}"
             )
 
         self._update_all_leds()
@@ -2437,7 +2446,7 @@ class Apc40StateMachine:
                 f"playing={g_state.playing}, "
                 f"effects={g_state.effects}, "
                 f"transforms={g_state.transforms}, "
-                f"dynamic_masks={g_state.dynamic_masks}, "
+                f"masks={g_state.masks}, "
                 f"color={g_state.color}"
             )
 
@@ -2653,7 +2662,7 @@ class Apc40StateMachine:
 
     def _set_role_layers_off(self, group_idx: int, role: str) -> None:
         """
-        When a role like 'color', 'effects', 'transforms', or 'dynamic_masks' is turned OFF,
+        When a role like 'color', 'effects', 'transforms', or 'masks' is turned OFF,
         set all layers for that role to OFF (column 1) via /connect, and do not change
         their current_clip_index.
         """
@@ -2871,10 +2880,10 @@ class Apc40StateMachine:
         if prop == "playing":
             # Fill layers autoplay when playing is turned on
             self._autoplay_fill_layers_for_group(group_idx)
-        elif prop in ("color", "effects", "transforms", "dynamic_masks"):
-            # For color, effects, transforms and dynamic_masks, trigger
+        elif prop in ("color", "effects", "transforms", "masks"):
+            # For color, effects, transforms and masks, trigger
             # autoplay for a single layer corresponding to the role.  For
-            # dynamic_masks this will choose a content clip or passthrough for
+            # masks this will choose a content clip or passthrough for
             # each dynamic mask layer based on intensity.
             role = self.PROP_TO_ROLE.get(prop)
             if role:
@@ -2921,9 +2930,9 @@ class Apc40StateMachine:
                 # When playing turns OFF, force fills to column 1 (Off)
                 self._set_fill_layers_off(group_idx)
 
-        # Extra behavior for color/effects/transforms/dynamic_masks when turning OFF:
-        elif not value and prop in ("color", "effects", "transforms", "dynamic_masks"):
-            # When turning off dynamic_masks or other roles, set their layers to
+        # Extra behavior for color/effects/transforms/masks when turning OFF:
+        elif not value and prop in ("color", "effects", "transforms", "masks"):
+            # When turning off masks or other roles, set their layers to
             # Passthrough (col=2) or OFF (col=1) depending on the role type.  Use
             # _set_role_layers_off to send OSC messages to Resolume.
             role = self.PROP_TO_ROLE.get(prop)
@@ -2956,7 +2965,7 @@ class Apc40StateMachine:
 
         For this controller:
           - playing: run fill autoplay again
-          - color/effects/transforms/dynamic_masks: reroll that role's clip choice
+          - color/effects/transforms/masks: reroll that role's clip choice
 
         Additionally:
           - If this is the Synesthesia group and we're NEXT-ing its 'playing'
@@ -2971,7 +2980,7 @@ class Apc40StateMachine:
             if self.synesthesia_group_idx is not None and group_idx == self.synesthesia_group_idx:
                 self.send_synesthesia_playlist_next()
 
-        elif prop in ("color", "effects", "transforms", "dynamic_masks"):
+        elif prop in ("color", "effects", "transforms", "masks"):
             role = self.PROP_TO_ROLE.get(prop)
             if role:
                 self._autoplay_role_single_layer(group_idx, role)
@@ -3287,8 +3296,8 @@ class Apc40StateMachine:
                 "color_autopilot": g.color_autopilot,
                 "opacity": g.opacity,
                 "intensity": g.intensity,
-                "dynamic_masks": g.dynamic_masks,
-                "dynamic_masks_autopilot": g.dynamic_masks_autopilot,
+                "masks": g.masks,
+                "masks_autopilot": g.masks_autopilot,
             }
         state["global"] = {
             "global_autopilot": self.global_autopilot,
@@ -3320,7 +3329,7 @@ class Apc40StateMachine:
         # Build a key representing the combination of booleans and intensities
         combo: List[Any] = []
         for g in self.groups:
-            combo.append((g.playing, g.effects, g.transforms, g.fft_mask, g.color, g.intensity, g.opacity, getattr(g, "dynamic_masks", False)))
+            combo.append((g.playing, g.effects, g.transforms, g.fft_mask, g.color, g.intensity, g.opacity, getattr(g, "masks", False)))
         key = str(combo)
         # Load existing votes if available
         votes: Dict[str, int] = {}
@@ -3439,8 +3448,8 @@ class Apc40StateMachine:
             color_autopilot=g.color_autopilot,
             opacity=g.opacity,
             intensity=g.intensity,
-            dynamic_masks=g.dynamic_masks,
-            dynamic_masks_autopilot=g.dynamic_masks_autopilot,
+            masks=g.masks,
+            masks_autopilot=g.masks_autopilot,
         )
 
     def _save_scene_snapshot(self, scene_index: int):
@@ -3473,9 +3482,9 @@ class Apc40StateMachine:
             g.color_autopilot = s.color_autopilot
 
             # Restore dynamic mask state for the group if present
-            if hasattr(s, "dynamic_masks"):
-                g.dynamic_masks = s.dynamic_masks
-                g.dynamic_masks_autopilot = getattr(s, "dynamic_masks_autopilot", True)
+            if hasattr(s, "masks"):
+                g.masks = s.masks
+                g.masks_autopilot = getattr(s, "masks_autopilot", True)
 
         self.active_scene = scene_index
         self.active_scene_pristine = True

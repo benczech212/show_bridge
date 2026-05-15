@@ -1,0 +1,17 @@
+composition_name: "Octagon Testing V2"
+
+apc_groups:
+  1: "Synestesia"
+  2: "Videos"
+  3: "Wire Effects"
+  4: "Logos"
+  # Panels and Beams renamed to "Output - Panels" / "Output - Beams" in Resolume
+  # and are now auto-detected as output groups (right-side APC columns)
+
+layer_roles:
+  colors: ["Color", "Colors", "Colour", "Colours"]
+  effects: ["Effects"]
+  transforms: ["Transform", "Transforms"]
+  masks: ["Masks", "FFT Masks", "Dynamic Masks", "FFT Mask"]
+  fills: ["Fill", "Fills", "Background"]
+  routing: ["Router", "Routing"]

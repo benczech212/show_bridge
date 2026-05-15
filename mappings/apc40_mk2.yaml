@@ -1,0 +1,191 @@
+controller_name: "Akai APC40 MkII"
+description: >
+  APC40 MK2 layout for show_bridge v2.
+  5×8 RGB clip grid (one role per row, one group per column) + track strip.
+  All 8 track faders control per-group opacity.
+  Device knobs unmapped (reserved for future use).
+author: "Benjamin Czech"
+version: 1.0
+
+# ───────────────────────────────────────────────────────────────────
+# SysEx: sent on startup to put MK2 into Alternate Ableton Live mode.
+# In this mode the host controls ALL LEDs.
+# ───────────────────────────────────────────────────────────────────
+sysex_init:
+  mode: 0x42          # 0x40=Generic  0x41=Ableton  0x42=Alt-Ableton (full host control)
+  app_version: [1, 0, 0]
+
+# ───────────────────────────────────────────────────────────────────
+# Clip Launch Grid  (5 rows × 8 columns = 40 RGB buttons)
+#
+# Inbound:  all buttons send on MIDI channel 0; note = row*8 + col
+# Outbound: channel = animation type; velocity = palette color (0=off)
+#   channel 0  → solid
+#   channel 8  → pulsing 1/8  (autopilot)
+#   channel 13 → blinking 1/8
+# ───────────────────────────────────────────────────────────────────
+clip_grid:
+  # row 0 = physical bottom, row 4 = physical top (controller is inverted vs note order)
+  rows:
+    - row: 0
+      role: playing
+      led:
+        on_velocity: 17              # chartreuse   #54FF00  hue ~100°
+        off_velocity: 0
+        autopilot_anim_channel: 10   # pulsing 1/2
+
+    - row: 1
+      role: effects
+      led:
+        on_velocity: 29              # spring green #00FF55  hue ~145°
+        off_velocity: 0
+        autopilot_anim_channel: 10
+
+    - row: 2
+      role: masks
+      led:
+        on_velocity: 37              # sky blue     #00A9FF  hue ~200°
+        off_velocity: 0
+        autopilot_anim_channel: 9    # pulsing 1/4 = 1 beat
+
+    - row: 3
+      role: transforms
+      led:
+        on_velocity: 49              # violet       #5400FF  hue ~260°
+        off_velocity: 0
+        autopilot_anim_channel: 10
+
+    - row: 4
+      role: colors
+      led:
+        # velocity derived at runtime from active clip name → palette match
+        on_velocity: dynamic
+        off_velocity: 0
+        autopilot_anim_channel: 10
+
+# ───────────────────────────────────────────────────────────────────
+# Track Strip  (per group; MIDI channel = group index 0–7)
+#
+#   note 0x30 (48) = ARM          → colors role
+#   note 0x31 (49) = SOLO         → effects role
+#   note 0x32 (50) = ACTIVATOR    → transforms role
+#   note 0x33 (51) = TRACK SELECT → masks role
+#   note 0x34 (52) = CLIP STOP    → playing role
+#   CC   0x07 ( 7) = Track Fader  → group opacity
+#
+# LED: velocity 0 = off, 1 = on (strip buttons are not RGB)
+# ───────────────────────────────────────────────────────────────────
+track_strip:
+  controls:
+    arm:          { note: 0x30, role: colors }
+    solo:         { note: 0x31, role: effects }
+    activator:    { note: 0x32, role: transforms }
+    track_select: { note: 0x33, role: masks }
+    clip_stop:    { note: 0x34, role: playing }
+  slider:         { cc: 0x07, action: set_group_opacity }
+
+# ───────────────────────────────────────────────────────────────────
+# Device Knobs  (CC 0x10–0x17, 8 knobs; LED rings CC 0x18–0x1F)
+# UNMAPPED – reserved for future assignment
+# ───────────────────────────────────────────────────────────────────
+device_knobs:
+  # CC 0x30–0x37 (48–55), all on MIDI channel 0, one knob per group (left→right)
+  action: set_group_intensity
+
+# ───────────────────────────────────────────────────────────────────
+# Global Controls  (all on MIDI channel 0)
+# ───────────────────────────────────────────────────────────────────
+global_controls:
+  master:          { note: 0x50 }   # 80
+  stop_all_clips:  { note: 0x51 }   # 81
+
+  scene_launch:
+    - { name: scene_1, note: 0x52 } # 82
+    - { name: scene_2, note: 0x53 } # 83
+    - { name: scene_3, note: 0x54 } # 84
+    - { name: scene_4, note: 0x55 } # 85
+    - { name: scene_5, note: 0x56 } # 86
+
+  navigation:
+    up:    { note: 0x5E }  # 94
+    down:  { note: 0x5F }  # 95
+    right: { note: 0x60 }  # 96
+    left:  { note: 0x61 }  # 97
+
+  timing:
+    shift:       { note: 0x62 }  # 98  → tempo_sync
+    tap_tempo:   { note: 0x63 }  # 99
+    nudge_minus: { note: 0x64 }  # 100
+    nudge_plus:  { note: 0x65 }  # 101
+
+  transport:
+    play:   { note: 0x5B }  # 91  → global autopilot ON
+    stop:   { note: 0x5C }  # 92  → global autopilot OFF
+    record: { note: 0x5D }  # 93  (reserved)
+
+  faders:
+    master: { cc: 0x0E }   # 14  → global opacity / master level
+
+# ───────────────────────────────────────────────────────────────────
+# State Action Mappings
+# Maps physical controls → state machine actions + gesture semantics
+# ───────────────────────────────────────────────────────────────────
+state_mappings:
+
+  # ── Grid & strip share the same role-button gesture set ──────────
+  # role_button behavior:
+  #   tap   (when enabled)  → next_clip
+  #   tap   (when disabled) → enable
+  #   hold  (when enabled)  → disable
+  #   hold  (when disabled) → enable
+  #   double                → toggle_autopilot
+  role_button_gestures: &role_button_gestures
+    tap:
+      when_enabled:  next_clip
+      when_disabled: enable
+    hold:
+      when_enabled:  disable
+      when_disabled: enable
+    double: toggle_autopilot
+
+  clip_grid:
+    gesture: *role_button_gestures   # applied to all 5 rows × 8 columns
+
+  track_strip:
+    arm:          { gesture: *role_button_gestures }
+    solo:         { gesture: *role_button_gestures }
+    activator:    { gesture: *role_button_gestures }
+    track_select: { gesture: *role_button_gestures }
+    clip_stop:    { gesture: *role_button_gestures }
+
+  # ── Global actions ───────────────────────────────────────────────
+  global:
+    stop_all_clips:
+      tap:  control_all_clips      # short = play all, long = stop all
+
+    play:
+      tap:  set_global_autopilot_on
+
+    stop:
+      tap:  set_global_autopilot_off
+
+    tap_tempo:
+      tap:  tap_tempo
+
+    nudge_minus:
+      tap:  nudge_minus
+
+    nudge_plus:
+      tap:  nudge_plus
+
+    shift:
+      tap:  tempo_sync
+
+    scene_1: &scene_gesture
+      tap:    recall_scene
+      hold:   save_scene
+      double: clear_scene
+    scene_2: *scene_gesture
+    scene_3: *scene_gesture
+    scene_4: *scene_gesture
+    scene_5: *scene_gesture
